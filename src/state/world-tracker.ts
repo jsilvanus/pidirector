@@ -256,7 +256,7 @@ export class WorldTracker {
       text: trimmed,
       timestamp: new Date().toISOString(),
     });
-    if (this.transcripts.length > 10) {
+    if (this.transcripts.length > 20) {
       this.transcripts.shift();
     }
   }

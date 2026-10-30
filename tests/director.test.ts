@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 
@@ -456,6 +459,104 @@ test("Human entry points: Advisory mode accept/dismiss, live steering API, and <
   assert.ok(spec.paths["/api/v1/stop"]);
   assert.ok(spec.paths["/api/v1/continue"]);
   assert.ok(spec.paths["/api/v1/steer"]);
+  assert.ok(spec.paths["/api/v1/logs"]);
+
+  await app.close();
+});
+
+test("Rolling context (recentDecisions & transcripts) is passed to Ollama and human-readable log is saved to file and API", async (t) => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pidirector-log-test-"));
+  t.after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+  const logFile = path.join(tmpDir, "decisions.log");
+
+  const capturedPrompts: any[] = [];
+  const mockFetch: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/chat")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const userMsg = JSON.parse(body.messages?.[1]?.content ?? "{}");
+      capturedPrompts.push(userMsg);
+
+      const nextInput = capturedPrompts.length === 1 ? 2 : 3;
+      return new Response(
+        JSON.stringify({
+          message: {
+            content: JSON.stringify({
+              thought: `Switch to Cam ${nextInput}`,
+              recommendedAction: "cut",
+              cutToInput: nextInput,
+              transition: "cut",
+              rationale: `Shot ${capturedPrompts.length} focus on Cam ${nextInput}`,
+            }),
+          },
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), {
+      status: 200,
+    });
+  };
+
+  const config = loadConfig({
+    PIDIRECTOR_MODE: "autonomous",
+    PIDIRECTOR_LOG_FILE: logFile,
+  });
+  const { app, world } = buildApp(config, { fetchFn: mockFetch, autoEvaluateOnCue: false });
+  await app.ready();
+
+  world.addTranscript("Herran rauha olkoon teidän kanssanne.");
+  world.addTranscript("Ja sinun henkesi kanssa.");
+
+  // 1st evaluation (cuts to Cam 2)
+  await app.inject({
+    method: "POST",
+    url: "/api/v1/evaluate",
+    payload: { trigger: "liturgy_greeting", bypassDwell: true },
+  });
+
+  // 2nd evaluation (cuts to Cam 3) -> should receive 1st decision in recentDecisions!
+  await app.inject({
+    method: "POST",
+    url: "/api/v1/evaluate",
+    payload: { trigger: "hymn_start", bypassDwell: true },
+  });
+
+  assert.equal(capturedPrompts.length, 2);
+  assert.equal(capturedPrompts[1].recentDecisions.length, 1);
+  assert.equal(capturedPrompts[1].recentDecisions[0].cutToInput, 2);
+  assert.equal(capturedPrompts[1].recentDecisions[0].executed, true);
+  assert.match(capturedPrompts[1].recentDecisions[0].summary, /CUT → Cam 2/);
+  assert.equal(capturedPrompts[1].recentTranscripts.length, 2);
+
+  // Verify human-readable logs via JSON API
+  const logsRes = await app.inject({
+    method: "GET",
+    url: "/api/v1/logs",
+  });
+  assert.equal(logsRes.statusCode, 200);
+  const logsJson = logsRes.json();
+  assert.equal(logsJson.logs.length, 2);
+  assert.equal(logsJson.logs[0].category, "cut");
+  assert.match(logsJson.logs[0].headline, /CUT → Cam 2/);
+  assert.match(logsJson.text, /\[CUT\] CUT → Cam 2/);
+  assert.match(logsJson.text, /\[CUT\] CUT → Cam 3/);
+
+  // Verify plain-text log endpoint (?format=text)
+  const textRes = await app.inject({
+    method: "GET",
+    url: "/api/v1/logs?format=text",
+  });
+  assert.equal(textRes.statusCode, 200);
+  assert.match(textRes.body, /Shot 1 focus on Cam 2/);
+  assert.match(textRes.body, /Shot 2 focus on Cam 3/);
+
+  // Verify log file was persisted on disk
+  const diskContent = await fs.readFile(logFile, "utf8");
+  assert.match(diskContent, /\[CUT\] CUT → Cam 2/);
+  assert.match(diskContent, /\[CUT\] CUT → Cam 3/);
 
   await app.close();
 });

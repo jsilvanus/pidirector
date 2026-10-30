@@ -4,6 +4,7 @@ import type {
   CameraMotionSnapshot,
   DecisionHistoryEntry,
   DirectorDecision,
+  DirectorLogEntry,
   DirectorMode,
   GuardrailVerdict,
   HumanSteeringState,
@@ -18,7 +19,8 @@ export type DirectorEvent =
   | { type: "advisory"; data: AdvisoryShot }
   | { type: "executed"; data: DecisionHistoryEntry }
   | { type: "suppressed"; data: { trigger: string; reason: string; decision: DirectorDecision; time: string } }
-  | { type: "preempted"; data: { reason: string; actor: string; previousMode: DirectorMode; newMode: DirectorMode; time: string } };
+  | { type: "preempted"; data: { reason: string; actor: string; previousMode: DirectorMode; newMode: DirectorMode; time: string } }
+  | { type: "log"; data: DirectorLogEntry };
 
 export class DirectorEventBroker {
   private readonly emitter = new EventEmitter();

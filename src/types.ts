@@ -167,6 +167,7 @@ export interface DecisionHistoryEntry {
   decision: DirectorDecision;
   guardrailVerdict: GuardrailVerdict;
   executed: boolean;
+  humanSummary: string;
   mcpCalls: Array<{
     tool: string;
     args: Record<string, unknown>;
@@ -175,3 +176,32 @@ export interface DecisionHistoryEntry {
   }>;
   latencyMs: number;
 }
+
+export type DirectorLogCategory =
+  | "cut"
+  | "prepare"
+  | "hold"
+  | "advisory"
+  | "suppressed"
+  | "fallback"
+  | "preempt"
+  | "mode"
+  | "steer";
+
+export interface DirectorLogEntry {
+  id: string;
+  timestamp: string;
+  timeShort: string;
+  level: "info" | "action" | "advisory" | "guardrail" | "override";
+  category: DirectorLogCategory;
+  headline: string;
+  detail: string;
+  formattedLine: string;
+  trigger?: string | undefined;
+  cueTitle?: string | null | undefined;
+  mode: DirectorMode;
+  source?: "ollama" | "deterministic-fallback" | "human-advisory-accept" | "operator" | undefined;
+  targetInput?: number | undefined;
+  preset?: string | number | undefined;
+}
+

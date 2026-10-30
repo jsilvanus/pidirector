@@ -2,11 +2,13 @@ import type { DirectorEventBroker } from "../events.js";
 import type { McpExecutor } from "../mcp/mcp-executor.js";
 import type { OllamaDirectorClient } from "../ollama/client.js";
 import type { CameraMotionTracker } from "../state/camera-motion-tracker.js";
+import type { DecisionLogger } from "../state/decision-logger.js";
 import type { WorldTracker } from "../state/world-tracker.js";
 import type {
   AdvisoryShot,
   DecisionHistoryEntry,
   DirectorDecision,
+  DirectorLogEntry,
   DirectorMode,
   GuardrailVerdict,
 } from "../types.js";
@@ -20,6 +22,7 @@ export interface DirectorEngineOptions {
   ollama: OllamaDirectorClient;
   mcpExecutor: McpExecutor;
   eventBroker: DirectorEventBroker;
+  decisionLogger: DecisionLogger;
   wideFallbackCameraInput?: number | undefined;
 }
 
@@ -43,6 +46,7 @@ export class DirectorEngine {
   private readonly ollama: OllamaDirectorClient;
   private readonly mcpExecutor: McpExecutor;
   private readonly eventBroker: DirectorEventBroker;
+  private readonly decisionLogger: DecisionLogger;
   private readonly wideFallbackCameraInput: number;
 
   private activeTurnAbort: AbortController | null = null;
@@ -59,6 +63,7 @@ export class DirectorEngine {
     this.ollama = options.ollama;
     this.mcpExecutor = options.mcpExecutor;
     this.eventBroker = options.eventBroker;
+    this.decisionLogger = options.decisionLogger;
     this.wideFallbackCameraInput = options.wideFallbackCameraInput ?? 1;
   }
 
@@ -92,13 +97,17 @@ export class DirectorEngine {
         time: new Date().toISOString(),
       },
     });
+    this.decisionLogger.logModeChange(newMode, previousMode, reason);
     return this.mode;
   }
 
   /**
    * Start directing in either autonomous (default) or advisory mode.
    */
-  start(targetMode: "autonomous" | "advisory" = "autonomous", reason = "Operator started director"): {
+  start(
+    targetMode: "autonomous" | "advisory" = "autonomous",
+    reason = "Operator started director"
+  ): {
     previousMode: DirectorMode;
     mode: DirectorMode;
   } {
@@ -111,7 +120,10 @@ export class DirectorEngine {
    * Stop/pause directing: immediately aborts any in-flight inference or camera settle wait (<5ms)
    * and transitions to manual (standby) mode while remembering lastActiveMode for continue().
    */
-  stop(reason = "Operator stopped director", actor = "operator"): {
+  stop(
+    reason = "Operator stopped director",
+    actor = "operator"
+  ): {
     preemptedTurn: boolean;
     previousMode: DirectorMode;
     newMode: DirectorMode;
@@ -190,6 +202,7 @@ export class DirectorEngine {
         time: new Date().toISOString(),
       },
     });
+    this.decisionLogger.logPreempt(reason, actor, previousMode, newMode);
 
     if (previousMode !== newMode) {
       this.eventBroker.emit({
@@ -216,6 +229,10 @@ export class DirectorEngine {
 
   getHistory(limit = 30): DecisionHistoryEntry[] {
     return this.history.slice(-limit);
+  }
+
+  getLogs(limit = 50): DirectorLogEntry[] {
+    return this.decisionLogger.getEntries(limit);
   }
 
   /**
@@ -250,7 +267,9 @@ export class DirectorEngine {
 
     // 2. Check explicit Rundown v2 item shotRules
     if (itemAi?.shotRules && itemAi.shotRules.length > 0) {
-      const sortedRules = [...itemAi.shotRules].sort((a, b) => (b.priority ?? 5) - (a.priority ?? 5));
+      const sortedRules = [...itemAi.shotRules].sort(
+        (a, b) => (b.priority ?? 5) - (a.priority ?? 5)
+      );
       for (const rule of sortedRules) {
         const cond = rule.condition.toLowerCase();
         const matches =
@@ -394,6 +413,7 @@ export class DirectorEngine {
     verdict: GuardrailVerdict;
     executed: boolean;
     advisory?: AdvisoryShot | undefined;
+    logEntry: DirectorLogEntry;
     historyEntry: DecisionHistoryEntry;
   }> {
     const startMs = Date.now();
@@ -408,6 +428,7 @@ export class DirectorEngine {
         rawDecision = await this.ollama.deliberate(trigger, this.world, this.cameraMotion, {
           tier: options?.tier,
           signal: turnController.signal,
+          recentDecisions: this.history,
         });
       } catch (err) {
         if (turnController.signal.aborted) {
@@ -423,6 +444,9 @@ export class DirectorEngine {
         bypassDwell: options?.bypassDwell,
       });
 
+      const timestamp = new Date().toISOString();
+      const cueTitle = this.world.getRundown().currentCueTitle;
+
       this.eventBroker.emit({
         type: "decision",
         data: {
@@ -430,7 +454,7 @@ export class DirectorEngine {
           source,
           decision: verdict.decision,
           verdict,
-          time: new Date().toISOString(),
+          time: timestamp,
         },
       });
 
@@ -443,19 +467,31 @@ export class DirectorEngine {
             trigger,
             reason: verdict.suppressedReason ?? "guardrail_blocked",
             decision: verdict.decision,
-            time: new Date().toISOString(),
+            time: timestamp,
           },
+        });
+
+        const logEntry = this.decisionLogger.logDecisionOutcome({
+          timestamp,
+          trigger,
+          cueTitle,
+          mode: this.mode,
+          source,
+          decision: verdict.decision,
+          verdict,
+          executed: false,
         });
 
         const historyEntry: DecisionHistoryEntry = {
           id: entryId,
-          timestamp: new Date().toISOString(),
+          timestamp,
           trigger,
           mode: this.mode,
           source,
           decision: verdict.decision,
           guardrailVerdict: verdict,
           executed: false,
+          humanSummary: logEntry.formattedLine,
           mcpCalls: [],
           latencyMs: Date.now() - startMs,
         };
@@ -467,21 +503,34 @@ export class DirectorEngine {
           decision: verdict.decision,
           verdict,
           executed: false,
+          logEntry,
           historyEntry,
         };
       }
 
       // If decision is "hold", no action or advisory needed
       if (verdict.decision.recommendedAction === "hold") {
+        const logEntry = this.decisionLogger.logDecisionOutcome({
+          timestamp,
+          trigger,
+          cueTitle,
+          mode: this.mode,
+          source,
+          decision: verdict.decision,
+          verdict,
+          executed: false,
+        });
+
         const historyEntry: DecisionHistoryEntry = {
           id: entryId,
-          timestamp: new Date().toISOString(),
+          timestamp,
           trigger,
           mode: this.mode,
           source,
           decision: verdict.decision,
           guardrailVerdict: verdict,
           executed: false,
+          humanSummary: logEntry.formattedLine,
           mcpCalls: [],
           latencyMs: Date.now() - startMs,
         };
@@ -493,6 +542,7 @@ export class DirectorEngine {
           decision: verdict.decision,
           verdict,
           executed: false,
+          logEntry,
           historyEntry,
         };
       }
@@ -504,7 +554,7 @@ export class DirectorEngine {
         }
         const advisory: AdvisoryShot = {
           id: `adv_${this.seqCounter++}`,
-          createdAt: new Date().toISOString(),
+          createdAt: timestamp,
           trigger,
           decision: verdict.decision,
           guardrailVerdict: verdict,
@@ -513,15 +563,28 @@ export class DirectorEngine {
         this.pendingAdvisory = advisory;
         this.eventBroker.emit({ type: "advisory", data: advisory });
 
+        const logEntry = this.decisionLogger.logDecisionOutcome({
+          timestamp,
+          trigger,
+          cueTitle,
+          mode: this.mode,
+          source,
+          decision: verdict.decision,
+          verdict,
+          executed: false,
+          advisory,
+        });
+
         const historyEntry: DecisionHistoryEntry = {
           id: entryId,
-          timestamp: new Date().toISOString(),
+          timestamp,
           trigger,
           mode: this.mode,
           source,
           decision: verdict.decision,
           guardrailVerdict: verdict,
           executed: false,
+          humanSummary: logEntry.formattedLine,
           mcpCalls: [],
           latencyMs: Date.now() - startMs,
         };
@@ -534,21 +597,34 @@ export class DirectorEngine {
           verdict,
           executed: false,
           advisory,
+          logEntry,
           historyEntry,
         };
       }
 
       // Manual Mode (without forceWhenManual) -> Do not execute
       if (this.mode === "manual") {
+        const logEntry = this.decisionLogger.logDecisionOutcome({
+          timestamp,
+          trigger,
+          cueTitle,
+          mode: this.mode,
+          source,
+          decision: verdict.decision,
+          verdict,
+          executed: false,
+        });
+
         const historyEntry: DecisionHistoryEntry = {
           id: entryId,
-          timestamp: new Date().toISOString(),
+          timestamp,
           trigger,
           mode: this.mode,
           source,
           decision: verdict.decision,
           guardrailVerdict: verdict,
           executed: false,
+          humanSummary: logEntry.formattedLine,
           mcpCalls: [],
           latencyMs: Date.now() - startMs,
         };
@@ -560,6 +636,7 @@ export class DirectorEngine {
           decision: verdict.decision,
           verdict,
           executed: false,
+          logEntry,
           historyEntry,
         };
       }
@@ -586,15 +663,27 @@ export class DirectorEngine {
         });
       }
 
+      const logEntry = this.decisionLogger.logDecisionOutcome({
+        timestamp: new Date().toISOString(),
+        trigger,
+        cueTitle,
+        mode: this.mode,
+        source,
+        decision: verdict.decision,
+        verdict,
+        executed: execRes.executed,
+      });
+
       const historyEntry: DecisionHistoryEntry = {
         id: entryId,
-        timestamp: new Date().toISOString(),
+        timestamp: logEntry.timestamp,
         trigger,
         mode: this.mode,
         source,
         decision: verdict.decision,
         guardrailVerdict: verdict,
         executed: execRes.executed,
+        humanSummary: logEntry.formattedLine,
         mcpCalls: execRes.mcpCalls,
         latencyMs: Date.now() - startMs,
       };
@@ -610,6 +699,7 @@ export class DirectorEngine {
         decision: verdict.decision,
         verdict,
         executed: execRes.executed,
+        logEntry,
         historyEntry,
       };
     } finally {
@@ -626,6 +716,7 @@ export class DirectorEngine {
     ok: boolean;
     error?: string | undefined;
     advisory?: AdvisoryShot | undefined;
+    logEntry?: DirectorLogEntry | undefined;
     historyEntry?: DecisionHistoryEntry | undefined;
   }> {
     if (!this.pendingAdvisory || this.pendingAdvisory.id !== advisoryId) {
@@ -671,15 +762,28 @@ export class DirectorEngine {
     advisory.status = "accepted";
     this.pendingAdvisory = null;
 
+    const timestamp = new Date().toISOString();
+    const logEntry = this.decisionLogger.logDecisionOutcome({
+      timestamp,
+      trigger: `advisory_accept:${advisory.id}`,
+      cueTitle: this.world.getRundown().currentCueTitle,
+      mode: this.mode,
+      source: "human-advisory-accept",
+      decision: verdict.decision,
+      verdict,
+      executed: true,
+    });
+
     const historyEntry: DecisionHistoryEntry = {
       id: `dec_${this.seqCounter++}`,
-      timestamp: new Date().toISOString(),
+      timestamp,
       trigger: `advisory_accept:${advisory.id}`,
       mode: this.mode,
       source: "human-advisory-accept",
       decision: verdict.decision,
       guardrailVerdict: verdict,
       executed: true,
+      humanSummary: logEntry.formattedLine,
       mcpCalls: execRes.mcpCalls,
       latencyMs: Date.now() - startMs,
     };
@@ -689,11 +793,16 @@ export class DirectorEngine {
     return {
       ok: true,
       advisory,
+      logEntry,
       historyEntry,
     };
   }
 
-  dismissAdvisory(advisoryId: string): { ok: boolean; error?: string | undefined; advisory?: AdvisoryShot | undefined } {
+  dismissAdvisory(advisoryId: string): {
+    ok: boolean;
+    error?: string | undefined;
+    advisory?: AdvisoryShot | undefined;
+  } {
     if (!this.pendingAdvisory || this.pendingAdvisory.id !== advisoryId) {
       return { ok: false, error: `Advisory '${advisoryId}' not found or no longer pending` };
     }
@@ -703,8 +812,9 @@ export class DirectorEngine {
     return { ok: true, advisory: dismissed };
   }
 
-  private parseShorthandTarget(target: string): { input: number; preset?: string | number } | null {
-    // e.g. "cam:2:preset:pulpit" or "atem:cut:2" or "switch:cut:1"
+  private parseShorthandTarget(
+    target: string
+  ): { input: number; preset?: string | number } | null {
     const parts = target.trim().split(":");
     if (parts[0] === "cam" && parts[1]) {
       const input = this.cameraMotion.getInputNumberForCamera(parts[1]);

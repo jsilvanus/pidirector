@@ -8,11 +8,13 @@ import { McpExecutor } from "./mcp/mcp-executor.js";
 import { OllamaDirectorClient } from "./ollama/client.js";
 import { registerRoutes } from "./routes.js";
 import { CameraMotionTracker } from "./state/camera-motion-tracker.js";
+import { DecisionLogger } from "./state/decision-logger.js";
 import { WorldTracker } from "./state/world-tracker.js";
 
 export interface BuildAppOptions {
   fetchFn?: typeof fetch | undefined;
   autoEvaluateOnCue?: boolean | undefined;
+  decisionLogPath?: string | undefined;
 }
 
 export interface BuildAppResult {
@@ -20,6 +22,7 @@ export interface BuildAppResult {
   engine: DirectorEngine;
   world: WorldTracker;
   cameraMotion: CameraMotionTracker;
+  decisionLogger: DecisionLogger;
   guardrails: GuardrailEngine;
   ollama: OllamaDirectorClient;
   mcpExecutor: McpExecutor;
@@ -33,6 +36,10 @@ export function buildApp(config: AppConfig, options?: BuildAppOptions): BuildApp
   });
 
   const eventBroker = new DirectorEventBroker();
+  const decisionLogger = new DecisionLogger({
+    eventBroker,
+    logFilePath: options?.decisionLogPath ?? config.decisionLogPath,
+  });
   const world = new WorldTracker(eventBroker, config.minShotDwellSec, config.maxShotDwellSec);
   const cameraMotion = new CameraMotionTracker(eventBroker, {
     cameraInputMap: config.cameraInputMap,
@@ -48,6 +55,8 @@ export function buildApp(config: AppConfig, options?: BuildAppOptions): BuildApp
     fastModel: config.fastModel,
     reasoningModel: config.reasoningModel,
     timeoutMs: config.ollamaTimeoutMs,
+    rollingDecisionWindow: config.rollingDecisionWindow,
+    rollingTranscriptWindow: config.rollingTranscriptWindow,
     fetchFn: options?.fetchFn,
   });
 
@@ -66,6 +75,7 @@ export function buildApp(config: AppConfig, options?: BuildAppOptions): BuildApp
     ollama,
     mcpExecutor,
     eventBroker,
+    decisionLogger,
     wideFallbackCameraInput: config.wideFallbackCameraInput,
   });
 
@@ -84,6 +94,7 @@ export function buildApp(config: AppConfig, options?: BuildAppOptions): BuildApp
     engine,
     world,
     cameraMotion,
+    decisionLogger,
     eventBroker,
     ingestor,
     ollama,
@@ -102,6 +113,7 @@ export function buildApp(config: AppConfig, options?: BuildAppOptions): BuildApp
     engine,
     world,
     cameraMotion,
+    decisionLogger,
     guardrails,
     ollama,
     mcpExecutor,

@@ -6,6 +6,7 @@ import type { DirectorEventBroker } from "./events.js";
 import type { EventIngestor } from "./ingest/sse-client.js";
 import type { OllamaDirectorClient } from "./ollama/client.js";
 import type { CameraMotionTracker } from "./state/camera-motion-tracker.js";
+import type { DecisionLogger } from "./state/decision-logger.js";
 import type { WorldTracker } from "./state/world-tracker.js";
 import { DirectorModeSchema, HumanSteeringPatchSchema } from "./types.js";
 
@@ -17,13 +18,14 @@ export interface RouteDependencies {
   engine: DirectorEngine;
   world: WorldTracker;
   cameraMotion: CameraMotionTracker;
+  decisionLogger: DecisionLogger;
   eventBroker: DirectorEventBroker;
   ingestor: EventIngestor;
   ollama: OllamaDirectorClient;
 }
 
 export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): void {
-  const { engine, world, cameraMotion, eventBroker, ingestor, ollama } = deps;
+  const { engine, world, cameraMotion, decisionLogger, eventBroker, ingestor, ollama } = deps;
 
   app.get("/health", async () => {
     return {
@@ -55,6 +57,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
       steering: world.getSteering(),
       effectiveConstraints: world.getEffectiveConstraints(),
       pendingAdvisory: engine.getPendingAdvisory(),
+      recentLogs: decisionLogger.getEntries(15),
       recentHistory: engine.getHistory(10),
     };
   });
@@ -196,10 +199,12 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
     }
 
     const steering = world.updateSteering(parsed.data);
+    const logEntry = decisionLogger.logSteering(steering, engine.getMode());
     return {
       ok: true,
       steering,
       effectiveConstraints: world.getEffectiveConstraints(),
+      logEntry,
     };
   });
 
@@ -275,6 +280,23 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
     return {
       ok: true,
       type: body.type,
+    };
+  });
+
+  app.get("/api/v1/logs", async (request, reply) => {
+    const query = (request.query ?? {}) as { limit?: string; format?: string };
+    const limit = query.limit ? Number.parseInt(query.limit, 10) : 50;
+    const safeLimit = Number.isNaN(limit) ? 50 : limit;
+    const logs = decisionLogger.getEntries(safeLimit);
+    const text = decisionLogger.getFormattedText(safeLimit);
+
+    if (query.format === "text") {
+      return reply.type("text/plain; charset=utf-8").send(text);
+    }
+
+    return {
+      logs,
+      text,
     };
   });
 

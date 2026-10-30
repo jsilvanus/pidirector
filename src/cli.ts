@@ -156,6 +156,17 @@ async function run(): Promise<void> {
       break;
     }
 
+    case "log":
+    case "logs": {
+      const data = await request("/api/v1/logs");
+      if (args.includes("--json")) {
+        console.log(JSON.stringify(data, null, 2));
+      } else {
+        console.log(data.text || "(No log entries yet)");
+      }
+      break;
+    }
+
     case "history": {
       const data = await request("/api/v1/history");
       console.log(JSON.stringify(data, null, 2));
@@ -185,6 +196,7 @@ Co-Pilot & Inspection Commands:
   pidirector accept <advisoryId>                     Accept & execute a pending advisory shot
   pidirector dismiss <advisoryId>                    Dismiss a pending advisory shot
   pidirector cameras                                 Inspect FreeD camera motion & settled states
+  pidirector logs [--json]                           View human-readable director decision log
   pidirector history                                 View recent directorial decisions & MCP calls
   pidirector openapi                                 Print the OpenAPI 3.1.0 specification`);
       break;

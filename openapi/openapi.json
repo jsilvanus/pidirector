@@ -371,6 +371,31 @@
         }
       }
     },
+    "/api/v1/logs": {
+      "get": {
+        "operationId": "getLogs",
+        "summary": "Retrieve human-readable director decision logs for operator UI display",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "default": 50 }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "enum": ["json", "text"], "default": "json" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Human-readable decision logs"
+          }
+        }
+      }
+    },
     "/api/v1/history": {
       "get": {
         "operationId": "getHistory",
