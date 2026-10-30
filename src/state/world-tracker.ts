@@ -6,6 +6,8 @@ import {
   type AiItemInstructions,
   type HumanSteeringPatch,
   type HumanSteeringState,
+  type PitubeBroadcastSnapshot,
+  type PitubeBroadcastState,
   type SteeringNote,
   type SteeringNoteCreate,
 } from "../types.js";
@@ -202,6 +204,19 @@ export class WorldTracker {
 
   private steeringNoteSeq = 1;
   private readonly transcripts: Array<{ text: string; timestamp: string }> = [];
+
+  private broadcast: PitubeBroadcastSnapshot = {
+    available: false,
+    state: "unknown",
+    id: null,
+    title: null,
+    description: null,
+    scheduledStartTime: null,
+    actualStartTime: null,
+    privacy: null,
+    streamHealth: null,
+    updatedAt: null,
+  };
 
   constructor(eventBroker?: DirectorEventBroker, initialMinDwellSec = 4, initialMaxDwellSec = 30) {
     this.eventBroker = eventBroker;
@@ -665,7 +680,150 @@ export class WorldTracker {
     return snap;
   }
 
+  getBroadcast(): PitubeBroadcastSnapshot {
+    return { ...this.broadcast };
+  }
+
+  /**
+   * Updates broadcast state and metadata from pitube (via GET /api/v1/status, GET /api/v1/broadcasts/current,
+   * or pigateway SSE youtube/pitube events).
+   */
+  updateBroadcast(data: Record<string, any>, nowMs = Date.now()): PitubeBroadcastSnapshot {
+    const selected =
+      (data["selectedBroadcast"] as Record<string, any> | null | undefined) ??
+      (data["broadcast"] as Record<string, any> | null | undefined) ??
+      undefined;
+
+    let parsedDetailTitle: string | undefined;
+    let parsedDetailState: PitubeBroadcastState | undefined;
+    let parsedDetailHealth: string | undefined;
+
+    if (typeof data["detail"] === "string") {
+      const m = /^Broadcast:\s+(.+?)\s+\((ready|testing|live|complete|idle)(?:,\s*health:\s*([^)]+))?\)$/i.exec(
+        data["detail"].trim()
+      );
+      if (m) {
+        parsedDetailTitle = m[1]!.trim();
+        parsedDetailState = m[2]!.toLowerCase() as PitubeBroadcastState;
+        if (m[3]) parsedDetailHealth = m[3].trim();
+      } else {
+        const idleMatch = /^Idle\s*\((ready|testing|live|complete|idle)\)$/i.exec(
+          data["detail"].trim()
+        );
+        if (idleMatch) {
+          parsedDetailState = idleMatch[1]!.toLowerCase() as PitubeBroadcastState;
+        }
+      }
+    }
+
+    const rawState =
+      data["lifecycleState"] ??
+      selected?.["status"] ??
+      parsedDetailState ??
+      data["status"] ??
+      data["state"];
+
+    const validStates: PitubeBroadcastState[] = [
+      "idle",
+      "ready",
+      "testing",
+      "live",
+      "complete",
+      "offline",
+      "unknown",
+    ];
+    const nextState: PitubeBroadcastState =
+      typeof rawState === "string" && validStates.includes(rawState as PitubeBroadcastState)
+        ? (rawState as PitubeBroadcastState)
+        : this.broadcast.state;
+
+    const incomingId =
+      selected?.["id"] ??
+      data["broadcastId"] ??
+      (typeof data["id"] === "string" ? data["id"] : undefined);
+
+    const incomingTitle =
+      selected?.["title"] ??
+      (typeof data["title"] === "string" ? data["title"] : undefined) ??
+      parsedDetailTitle;
+
+    const incomingDesc =
+      selected?.["description"] ??
+      (typeof data["description"] === "string" ? data["description"] : undefined);
+
+    const incomingSched =
+      selected?.["scheduledStartTime"] ??
+      (typeof data["scheduledStartTime"] === "string" ? data["scheduledStartTime"] : undefined);
+
+    const incomingActual =
+      selected?.["actualStartTime"] ??
+      (typeof data["actualStartTime"] === "string" ? data["actualStartTime"] : undefined);
+
+    const incomingPrivacy =
+      selected?.["privacy"] ??
+      (typeof data["privacy"] === "string" ? data["privacy"] : undefined);
+
+    const incomingHealth =
+      (typeof data["streamHealth"] === "string" ? data["streamHealth"] : undefined) ??
+      parsedDetailHealth;
+
+    this.broadcast = {
+      available: data["available"] !== undefined ? Boolean(data["available"]) : true,
+      state: nextState,
+      id:
+        incomingId !== undefined && incomingId !== ""
+          ? String(incomingId)
+          : this.broadcast.id,
+      title:
+        incomingTitle !== undefined && String(incomingTitle).trim() !== ""
+          ? String(incomingTitle).trim()
+          : this.broadcast.title,
+      description:
+        incomingDesc !== undefined ? (incomingDesc ? String(incomingDesc) : null) : this.broadcast.description,
+      scheduledStartTime:
+        incomingSched !== undefined
+          ? incomingSched
+            ? String(incomingSched)
+            : null
+          : this.broadcast.scheduledStartTime,
+      actualStartTime:
+        incomingActual !== undefined
+          ? incomingActual
+            ? String(incomingActual)
+            : null
+          : this.broadcast.actualStartTime,
+      privacy:
+        incomingPrivacy === "public" ||
+        incomingPrivacy === "unlisted" ||
+        incomingPrivacy === "private"
+          ? incomingPrivacy
+          : this.broadcast.privacy,
+      streamHealth:
+        incomingHealth !== undefined ? incomingHealth : this.broadcast.streamHealth,
+      updatedAt: new Date(nowMs).toISOString(),
+    };
+
+    const snap = this.getBroadcast();
+    this.eventBroker?.emit({ type: "broadcast-updated", data: snap });
+    return snap;
+  }
+
+  resetBroadcastState(): void {
+    if (this.broadcast.state !== "live" && this.broadcast.state !== "ready" && this.broadcast.state !== "testing") {
+      this.broadcast = {
+        ...this.broadcast,
+        id: null,
+        title: null,
+        description: null,
+        scheduledStartTime: null,
+        actualStartTime: null,
+        privacy: null,
+      };
+    }
+  }
+
   resetBroadcastSteering(nowMs = Date.now()): HumanSteeringState {
+    this.resetBroadcastState();
     this.steering = {
       instruction: null,
       notes: [],

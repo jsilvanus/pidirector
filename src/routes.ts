@@ -6,7 +6,11 @@ import type { DirectorEventBroker } from "./events.js";
 import type { EventIngestor } from "./ingest/sse-client.js";
 import type { OllamaDirectorClient } from "./ollama/client.js";
 import type { CameraMotionTracker } from "./state/camera-motion-tracker.js";
-import { formatLogsForCli, type DecisionLogger } from "./state/decision-logger.js";
+import {
+  formatBroadcastForCli,
+  formatLogsForCli,
+  type DecisionLogger,
+} from "./state/decision-logger.js";
 import type { WorldTracker } from "./state/world-tracker.js";
 import {
   DirectorModeSchema,
@@ -49,8 +53,9 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
     const ollamaHealthy = await ollama.isHealthy();
     return {
       service: "pidirector",
-      broadcastId: decisionLogger.getBroadcastId(),
+      broadcastId: decisionLogger.getBroadcastId(world),
       broadcastStartedAt: decisionLogger.getStartedAt(),
+      pitube: world.getBroadcast(),
       mode: engine.getMode(),
       lastActiveMode: engine.getLastActiveMode(),
       ollamaHealthy,
@@ -355,48 +360,101 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
       return reply.type("text/plain; charset=utf-8").send(formatLogsForCli(logs));
     }
 
+    const pitube = world.getBroadcast();
+    const naming = decisionLogger.resolveBroadcastNaming(world);
+
     return {
-      broadcastId: decisionLogger.getBroadcastId(),
+      broadcastId: naming.broadcastId,
+      title: naming.title,
       startedAt: decisionLogger.getStartedAt(),
+      pitube,
       event: {
-        title: rundown.title,
+        title: pitube.title ?? rundown.title ?? naming.date,
         service: rundown.service,
         church: rundown.church,
-        date: rundown.date,
+        date: naming.date,
       },
       notes: steering.notes,
       logs,
     };
   });
 
-  app.get("/api/v1/broadcast", async () => {
+  app.get("/api/v1/broadcast", async (request, reply) => {
+    if (!world.getBroadcast().title) {
+      await ingestor.syncPitubeBroadcast();
+    }
+    const broadcast = decisionLogger.buildBroadcastSnapshot(world);
+    const query = (request.query ?? {}) as { format?: string };
+    if (query.format === "text") {
+      return reply.type("text/plain; charset=utf-8").send(formatBroadcastForCli(broadcast));
+    }
     return {
-      broadcast: decisionLogger.buildBroadcastSnapshot(world),
+      broadcast,
+    };
+  });
+
+  app.get("/api/v1/broadcast/dump", async (request, reply) => {
+    if (!world.getBroadcast().title) {
+      await ingestor.syncPitubeBroadcast();
+    }
+    const query = (request.query ?? {}) as { format?: string; stdout?: string; save?: string };
+    const format = query.format === "text" ? "text" : "json";
+    const stdout = query.stdout === "true" || query.stdout === "1";
+    const saveToFile = query.save === "true" || query.save === "1";
+
+    const res = decisionLogger.dumpBroadcast(world, {
+      saveToFile,
+      stdout,
+      format,
+    });
+    if (format === "text") {
+      return reply.type("text/plain; charset=utf-8").send(formatBroadcastForCli(res.broadcast));
+    }
+    return {
+      ok: true,
+      filePath: res.filePath,
+      broadcast: res.broadcast,
+      activeBroadcastId: decisionLogger.getBroadcastId(world),
     };
   });
 
   app.post("/api/v1/broadcast/dump", async (request) => {
+    if (!world.getBroadcast().title) {
+      await ingestor.syncPitubeBroadcast();
+    }
     const body = (request.body ?? {}) as {
       reset?: boolean;
       broadcastId?: string;
+      saveToFile?: boolean;
+      stdout?: boolean;
+      format?: "json" | "text";
     };
     const res = decisionLogger.dumpBroadcast(world, {
       reset: body.reset,
       broadcastId: body.broadcastId,
+      saveToFile: body.saveToFile,
+      stdout: body.stdout,
+      format: body.format,
     });
     return {
       ok: true,
       filePath: res.filePath,
       broadcast: res.broadcast,
-      activeBroadcastId: decisionLogger.getBroadcastId(),
+      activeBroadcastId: decisionLogger.getBroadcastId(world),
     };
   });
 
   app.post("/api/v1/broadcast/end", async (request) => {
+    if (!world.getBroadcast().title) {
+      await ingestor.syncPitubeBroadcast();
+    }
     const body = (request.body ?? {}) as {
       reason?: string;
       actor?: string;
       broadcastId?: string;
+      saveToFile?: boolean;
+      stdout?: boolean;
+      format?: "json" | "text";
     };
     const stopRes = engine.stop(
       body.reason ?? "Broadcast ended",
@@ -405,13 +463,16 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
     const dumpRes = decisionLogger.dumpBroadcast(world, {
       reset: true,
       broadcastId: body.broadcastId,
+      saveToFile: body.saveToFile,
+      stdout: body.stdout,
+      format: body.format,
     });
     return {
       ok: true,
       stop: stopRes,
       filePath: dumpRes.filePath,
       broadcast: dumpRes.broadcast,
-      nextBroadcastId: decisionLogger.getBroadcastId(),
+      nextBroadcastId: decisionLogger.getBroadcastId(world),
     };
   });
 

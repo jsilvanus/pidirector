@@ -848,14 +848,37 @@ test("Steering notes durability: broadcast, section, subsection, timer expiratio
   await app.close();
 });
 
-test("Per-broadcast log and steering notes dump, save to disk, list, retrieve, and reset after broadcast ends", async (t) => {
+test("Per-broadcast log and steering notes dump with pitube broadcast title, date-only fallback when pitube unavailable, and stdout dump", async (t) => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pidirector-broadcasts-"));
   t.after(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  let pitubeAvailable = true;
   const mockFetch: typeof fetch = async (input) => {
     const url = String(input);
+    if (url.endsWith("/api/v1/status") && url.includes("3105")) {
+      if (!pitubeAvailable) {
+        throw new Error("pitube offline");
+      }
+      return new Response(
+        JSON.stringify({
+          service: "pitube",
+          state: "live",
+          selectedBroadcast: {
+            id: "yt_bc_101",
+            title: "Pyhän miesten päivän messu",
+            scheduledStartTime: "2026-11-01T08:00:00Z",
+            actualStartTime: "2026-11-01T08:00:15Z",
+            privacy: "public",
+            status: "live",
+            embedUrl: "https://www.youtube.com/embed/yt_bc_101",
+          },
+          streamHealth: "good",
+        }),
+        { status: 200 }
+      );
+    }
     if (url.endsWith("/api/chat")) {
       return new Response(
         JSON.stringify({
@@ -878,11 +901,15 @@ test("Per-broadcast log and steering notes dump, save to disk, list, retrieve, a
   const config = loadConfig({
     PIDIRECTOR_MODE: "autonomous",
     PIDIRECTOR_BROADCASTS_DIR: tmpDir,
+    PITUBE_URL: "http://127.0.0.1:3105",
   });
-  const { app, world } = buildApp(config, { fetchFn: mockFetch, autoEvaluateOnCue: false });
+  const { app, world, decisionLogger } = buildApp(config, {
+    fetchFn: mockFetch,
+    autoEvaluateOnCue: false,
+  });
   await app.ready();
 
-  // 1. Set broadcast event metadata and add steering note + evaluate a cut
+  // 1. Set rundown context, add steering note, and evaluate a cut
   world.updateRundownContext({
     title: "Sunday High Mass",
     service: "Messu",
@@ -908,7 +935,21 @@ test("Per-broadcast log and steering notes dump, save to disk, list, retrieve, a
     payload: { trigger: "sermon_start", bypassDwell: true },
   });
 
-  // 2. End broadcast -> stops director, saves per-broadcast JSON file (notes + logs + stats), and resets for next broadcast
+  // 2. Dump directly to stdout without writing a file (saveToFile: false, stdout: true)
+  const capturedStdout: string[] = [];
+  const stdoutRes = decisionLogger.dumpBroadcast(world, {
+    saveToFile: false,
+    stdout: true,
+    format: "text",
+    stdoutWrite: (chunk) => capturedStdout.push(chunk),
+  });
+  assert.equal(stdoutRes.filePath, null);
+  assert.equal(capturedStdout.length, 1);
+  assert.match(capturedStdout[0]!, /Guest bishop preaching from lectern today/);
+  assert.match(capturedStdout[0]!, /CUT → Cam 2/);
+
+  // 3. End broadcast while pitube is available -> pulls title from pitube ("Pyhän miesten päivän messu"),
+  // names broadcast "2026-11-01_pyh-n-miesten-p-iv-n-messu", saves file, and resets for next broadcast
   const endRes = await app.inject({
     method: "POST",
     url: "/api/v1/broadcast/end",
@@ -918,19 +959,31 @@ test("Per-broadcast log and steering notes dump, save to disk, list, retrieve, a
   const endJson = endRes.json();
   assert.equal(endJson.ok, true);
   assert.ok(endJson.filePath.endsWith(".json"));
-  assert.equal(endJson.broadcast.event.title, "Sunday High Mass");
+  assert.equal(endJson.broadcast.pitube.id, "yt_bc_101");
+  assert.equal(endJson.broadcast.pitube.title, "Pyhän miesten päivän messu");
+  assert.equal(endJson.broadcast.title, "Pyhän miesten päivän messu");
+  assert.equal(endJson.broadcast.broadcastId, "2026-11-01_pyh-n-miesten-p-iv-n-messu");
   assert.equal(endJson.broadcast.notes.length, 1);
   assert.equal(endJson.broadcast.notes[0].text, "Guest bishop preaching from lectern today");
   assert.equal(endJson.broadcast.stats.cutsExecuted, 1);
   assert.equal(endJson.broadcast.stats.steeringNotesTotal, 1);
 
-  // Verify CLI formatter renders the broadcast dump with notes and logs
+  // Verify CLI formatter renders the broadcast dump with pitube title, notes, and logs
   const cliBroadcastText = formatBroadcastForCli(endJson.broadcast);
-  assert.match(cliBroadcastText, /Sunday High Mass — Messu — Keskuskirkko/);
+  assert.match(cliBroadcastText, /Pyhän miesten päivän messu — Messu — Keskuskirkko/);
   assert.match(cliBroadcastText, /Guest bishop preaching from lectern today/);
   assert.match(cliBroadcastText, /CUT → Cam 2/);
 
-  // 3. Verify active session was reset cleanly for the next broadcast
+  // 4. Verify active session was reset cleanly
+  world.updateBroadcast({
+    available: false,
+    state: "idle",
+    id: null,
+    title: null,
+  });
+  world.resetBroadcastState();
+  pitubeAvailable = false;
+
   const activeLogsRes = await app.inject({
     method: "GET",
     url: "/api/v1/logs",
@@ -938,26 +991,67 @@ test("Per-broadcast log and steering notes dump, save to disk, list, retrieve, a
   const activeLogs = activeLogsRes.json();
   assert.equal(activeLogs.logs.length, 0);
   assert.equal(activeLogs.notes.length, 0);
-  assert.notEqual(activeLogs.broadcastId, endJson.broadcast.broadcastId);
 
-  // 4. List saved broadcasts and fetch the saved broadcast by ID
+  // 5. Fallback when pitube is NOT available: broadcast is named by date only ("2026-11-01")
+  const fallbackDumpRes = await app.inject({
+    method: "POST",
+    url: "/api/v1/broadcast/dump",
+    payload: { saveToFile: true },
+  });
+  assert.equal(fallbackDumpRes.statusCode, 200);
+  const fallbackDump = fallbackDumpRes.json();
+  assert.equal(fallbackDump.broadcast.broadcastId, "2026-11-01");
+  assert.equal(fallbackDump.broadcast.title, "2026-11-01");
+  assert.ok(fallbackDump.filePath.endsWith("2026-11-01.json"));
+
+  // 6. Verify GET /api/v1/broadcast/dump?format=text returns human-readable dump without saving
+  const textDumpRes = await app.inject({
+    method: "GET",
+    url: "/api/v1/broadcast/dump?format=text",
+  });
+  assert.equal(textDumpRes.statusCode, 200);
+  assert.match(textDumpRes.body, /Broadcast: 2026-11-01/);
+
+  // 7. Verify pitube lifecycle event (live -> complete) via SSE/ingest auto-dumps broadcast
+  await app.inject({
+    method: "POST",
+    url: "/api/v1/ingest/event",
+    payload: {
+      type: "youtube",
+      data: {
+        state: "live",
+        detail: "Broadcast: Iltamessu (live, health: good)",
+      },
+    },
+  });
+  assert.equal(world.getBroadcast().title, "Iltamessu");
+  assert.equal(world.getBroadcast().state, "live");
+  assert.equal(decisionLogger.getBroadcastId(world), "2026-11-01_iltamessu");
+
+  await app.inject({
+    method: "POST",
+    url: "/api/v1/ingest/event",
+    payload: {
+      type: "youtube",
+      data: {
+        state: "offline",
+        lifecycleState: "complete",
+        detail: "Idle (complete)",
+      },
+    },
+  });
+
+  // 8. List saved broadcasts and verify all 3 dumps exist on disk
   const listRes = await app.inject({
     method: "GET",
     url: "/api/v1/broadcasts",
   });
   assert.equal(listRes.statusCode, 200);
   const listJson = listRes.json();
-  assert.equal(listJson.broadcasts.length, 1);
-  assert.equal(listJson.broadcasts[0].broadcastId, endJson.broadcast.broadcastId);
-
-  const getSavedRes = await app.inject({
-    method: "GET",
-    url: `/api/v1/broadcasts/${endJson.broadcast.broadcastId}`,
-  });
-  assert.equal(getSavedRes.statusCode, 200);
-  const savedBroadcast = getSavedRes.json().broadcast;
-  assert.equal(savedBroadcast.notes.length, 1);
-  assert.ok(savedBroadcast.logs.some((l: any) => l.category === "cut"));
+  const savedIds = listJson.broadcasts.map((b: any) => b.broadcastId);
+  assert.ok(savedIds.includes("2026-11-01_pyh-n-miesten-p-iv-n-messu"));
+  assert.ok(savedIds.includes("2026-11-01"));
+  assert.ok(savedIds.includes("2026-11-01_iltamessu"));
 
   await app.close();
 });

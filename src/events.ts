@@ -9,6 +9,7 @@ import type {
   DirectorMode,
   GuardrailVerdict,
   HumanSteeringState,
+  PitubeBroadcastSnapshot,
 } from "./types.js";
 
 export type DirectorEvent =
@@ -22,7 +23,8 @@ export type DirectorEvent =
   | { type: "suppressed"; data: { trigger: string; reason: string; decision: DirectorDecision; time: string } }
   | { type: "preempted"; data: { reason: string; actor: string; previousMode: DirectorMode; newMode: DirectorMode; time: string } }
   | { type: "log"; data: DirectorLogEntry }
-  | { type: "broadcast-dumped"; data: { broadcastId: string; filePath: string; endedAt: string; stats: BroadcastStats } };
+  | { type: "broadcast-updated"; data: PitubeBroadcastSnapshot }
+  | { type: "broadcast-dumped"; data: { broadcastId: string; filePath: string | null; endedAt: string; stats: BroadcastStats } };
 
 export class DirectorEventBroker {
   private readonly emitter = new EventEmitter();

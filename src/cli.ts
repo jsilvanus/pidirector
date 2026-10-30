@@ -225,27 +225,42 @@ async function run(): Promise<void> {
 
     case "dump": {
       const reset = args.includes("--reset");
-      const data = await request("/api/v1/broadcast/dump", "POST", { reset });
+      const toStdoutOnly =
+        args.includes("--stdout") || args.includes("-s") || args.includes("--no-save");
+      const saveToFile = toStdoutOnly ? args.includes("--save") : true;
+      const data = await request("/api/v1/broadcast/dump", "POST", {
+        reset,
+        saveToFile,
+      });
       if (args.includes("--json")) {
-        console.log(JSON.stringify(data, null, 2));
+        process.stdout.write(`${JSON.stringify(toStdoutOnly ? data.broadcast : data, null, 2)}\n`);
       } else {
-        console.log(`Saved broadcast log to: ${data.filePath}\n`);
-        console.log(formatBroadcastForCli(data.broadcast));
+        if (data.filePath && !toStdoutOnly) {
+          process.stdout.write(`Saved broadcast log to: ${data.filePath}\n\n`);
+        }
+        process.stdout.write(`${formatBroadcastForCli(data.broadcast)}\n`);
       }
       break;
     }
 
     case "end": {
-      const reason = args.filter((a) => !a.startsWith("--")).join(" ").trim() || "CLI broadcast ended";
+      const toStdoutOnly =
+        args.includes("--stdout") || args.includes("-s") || args.includes("--no-save");
+      const saveToFile = toStdoutOnly ? args.includes("--save") : true;
+      const reason =
+        args.filter((a) => !a.startsWith("-")).join(" ").trim() || "CLI broadcast ended";
       const data = await request("/api/v1/broadcast/end", "POST", {
         reason,
         actor: "cli-operator",
+        saveToFile,
       });
       if (args.includes("--json")) {
-        console.log(JSON.stringify(data, null, 2));
+        process.stdout.write(`${JSON.stringify(toStdoutOnly ? data.broadcast : data, null, 2)}\n`);
       } else {
-        console.log(`Broadcast ended and saved to: ${data.filePath}\n`);
-        console.log(formatBroadcastForCli(data.broadcast));
+        if (data.filePath && !toStdoutOnly) {
+          process.stdout.write(`Broadcast ended and saved to: ${data.filePath}\n\n`);
+        }
+        process.stdout.write(`${formatBroadcastForCli(data.broadcast)}\n`);
       }
       break;
     }
@@ -314,8 +329,8 @@ Co-Pilot & Inspection Commands:
   pidirector dismiss <advisoryId>                    Dismiss a pending advisory shot
   pidirector cameras                                 Inspect FreeD camera motion & settled states
   pidirector logs [--json]                           View human-readable director decision log
-  pidirector dump [--reset] [--json]                 Dump & save current broadcast (notes + logs) to file
-  pidirector end [reason] [--json]                   End broadcast, save per-broadcast dump, and reset
+  pidirector dump [--stdout] [--reset] [--json]      Dump broadcast (notes + logs) to file or stdout
+  pidirector end [reason] [--stdout] [--json]        End broadcast, dump per-broadcast log, and reset
   pidirector broadcast [broadcastId] [--json]        View current or saved broadcast with notes & logs
   pidirector broadcasts [--json]                     List saved per-broadcast archives
   pidirector history                                 View recent directorial decisions & MCP calls

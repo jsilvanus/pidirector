@@ -89,11 +89,12 @@ export function formatLogsForCli(entries: DirectorLogEntry[]): string {
 }
 
 export function formatBroadcastForCli(dump: BroadcastDump): string {
-  const eventTitle =
-    [dump.event.title, dump.event.service, dump.event.church].filter(Boolean).join(" — ") ||
-    "Unnamed Broadcast";
+  const details = [dump.title, dump.event.service, dump.event.church]
+    .filter((v, idx, arr) => Boolean(v) && arr.indexOf(v) === idx)
+    .join(" — ");
+  const headerLabel = details ? `${dump.broadcastId} (${details})` : dump.broadcastId;
   const lines: string[] = [
-    `Broadcast: ${dump.broadcastId} (${eventTitle})`,
+    `Broadcast: ${headerLabel}`,
     `Started:   ${dump.startedAt}${dump.endedAt ? ` | Ended: ${dump.endedAt}` : " (Active)"}`,
     `Stats:     ${dump.stats.totalDecisions} decisions (${dump.stats.cutsExecuted} cuts, ${dump.stats.preparesExecuted} prepares, ${dump.stats.holds} holds, ${dump.stats.guardrailSuppressions} guardrails, ${dump.stats.humanPreemptions} preemptions)`,
   ];
@@ -121,6 +122,19 @@ export function formatBroadcastForCli(dump: BroadcastDump): string {
   return lines.join("\n");
 }
 
+function extractIsoDate(val?: string | null): string | null {
+  if (!val || typeof val !== "string") return null;
+  const trimmed = val.trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    return trimmed.slice(0, 10);
+  }
+  const parsed = Date.parse(trimmed);
+  if (!Number.isNaN(parsed)) {
+    return new Date(parsed).toISOString().slice(0, 10);
+  }
+  return null;
+}
+
 export class DecisionLogger {
   private readonly entries: DirectorLogEntry[] = [];
   private readonly eventBroker?: DirectorEventBroker | undefined;
@@ -128,7 +142,6 @@ export class DecisionLogger {
   private readonly broadcastsDir: string;
   private readonly maxEntries: number;
   private seq = 1;
-  private broadcastSeq = 1;
   private broadcastId: string;
   private startedAt: string;
   private dirCreated = false;
@@ -139,19 +152,50 @@ export class DecisionLogger {
     this.broadcastsDir = path.resolve(options.broadcastsDir ?? "data/broadcasts");
     this.maxEntries = options.maxEntries ?? 500;
     this.startedAt = new Date().toISOString();
-    this.broadcastId = this.generateBroadcastId();
+    this.broadcastId = this.startedAt.slice(0, 10);
     this.loadFromDisk();
   }
 
-  private generateBroadcastId(title?: string | null, dateStr?: string | null): string {
-    const now = new Date();
-    const day = dateStr || now.toISOString().slice(0, 10);
-    const timePart = now.toISOString().slice(11, 19).replace(/:/g, "");
-    const slug = sanitizeSlug(title || "service");
-    return `${day}_${slug}_${timePart}_${this.broadcastSeq++}`;
+  /**
+   * Resolves broadcast naming using pitube's broadcast title when available.
+   * If pitube (or its broadcast title) is not available, names the broadcast by date only (YYYY-MM-DD).
+   */
+  resolveBroadcastNaming(world?: WorldTracker): {
+    broadcastId: string;
+    title: string;
+    date: string;
+  } {
+    const pitube = world?.getBroadcast();
+    const rundown = world?.getRundown();
+    const day =
+      extractIsoDate(pitube?.actualStartTime) ??
+      extractIsoDate(pitube?.scheduledStartTime) ??
+      extractIsoDate(rundown?.date) ??
+      this.startedAt.slice(0, 10);
+
+    const pitubeTitle = pitube?.title?.trim() || null;
+    if (pitubeTitle) {
+      const slug = sanitizeSlug(pitubeTitle);
+      const broadcastId = slug === day ? day : `${day}_${slug}`;
+      return {
+        broadcastId,
+        title: pitubeTitle,
+        date: day,
+      };
+    }
+
+    // Fallback when pitube title is not available: name broadcast by date only
+    return {
+      broadcastId: day,
+      title: day,
+      date: day,
+    };
   }
 
-  getBroadcastId(): string {
+  getBroadcastId(world?: WorldTracker): string {
+    if (world) {
+      this.broadcastId = this.resolveBroadcastNaming(world).broadcastId;
+    }
     return this.broadcastId;
   }
 
@@ -216,23 +260,29 @@ export class DecisionLogger {
     options?: { endedAt?: string | null | undefined; customId?: string | undefined }
   ): BroadcastDump {
     const rundown = world.getRundown();
+    const pitube = world.getBroadcast();
     const steering = world.getSteering();
-    const broadcastId =
-      options?.customId ??
-      (this.broadcastId.includes("_service_") && rundown.title
-        ? this.generateBroadcastId(rundown.title, rundown.date)
-        : this.broadcastId);
+    const naming = this.resolveBroadcastNaming(world);
+    const broadcastId = options?.customId ?? naming.broadcastId;
     this.broadcastId = broadcastId;
 
     return {
       broadcastId,
+      title: naming.title,
       startedAt: this.startedAt,
       endedAt: options?.endedAt ?? null,
+      pitube: {
+        id: pitube.id,
+        title: pitube.title,
+        state: pitube.state,
+        scheduledStartTime: pitube.scheduledStartTime,
+        actualStartTime: pitube.actualStartTime,
+      },
       event: {
-        title: rundown.title,
+        title: pitube.title ?? rundown.title ?? naming.date,
         service: rundown.service,
         church: rundown.church,
-        date: rundown.date,
+        date: naming.date,
       },
       steering,
       notes: steering.notes.map((n) => ({ ...n })),
@@ -243,15 +293,23 @@ export class DecisionLogger {
 
   /**
    * Dumps the current broadcast (including all steering notes and structured decision logs)
-   * into a per-broadcast JSON file on disk (`<broadcastsDir>/<broadcastId>.json`).
+   * to a per-broadcast JSON file on disk (`<broadcastsDir>/<broadcastId>.json`) and/or `stdout`.
    * If `options.reset` is true, starts a fresh broadcast session (clearing logs and steering notes).
    */
   dumpBroadcast(
     world: WorldTracker,
-    options?: { reset?: boolean | undefined; broadcastId?: string | undefined }
+    options?: {
+      reset?: boolean | undefined;
+      broadcastId?: string | undefined;
+      saveToFile?: boolean | undefined;
+      stdout?: boolean | undefined;
+      format?: "json" | "text" | undefined;
+      stdoutWrite?: ((chunk: string) => void) | undefined;
+    }
   ): {
     broadcast: BroadcastDump;
-    filePath: string;
+    filePath: string | null;
+    stdoutOutput?: string | undefined;
   } {
     const endedAt = new Date().toISOString();
     const broadcast = this.buildBroadcastSnapshot(world, {
@@ -259,13 +317,27 @@ export class DecisionLogger {
       customId: options?.broadcastId,
     });
 
-    mkdirSync(this.broadcastsDir, { recursive: true });
-    const fileName = `${broadcast.broadcastId}.json`;
-    const filePath = path.join(this.broadcastsDir, fileName);
-    writeFileSync(filePath, JSON.stringify(broadcast, null, 2), "utf8");
+    const saveToFile = options?.saveToFile ?? true;
+    let filePath: string | null = null;
+    if (saveToFile) {
+      mkdirSync(this.broadcastsDir, { recursive: true });
+      const fileName = `${broadcast.broadcastId}.json`;
+      filePath = path.join(this.broadcastsDir, fileName);
+      writeFileSync(filePath, JSON.stringify(broadcast, null, 2), "utf8");
+    }
+
+    let stdoutOutput: string | undefined;
+    if (options?.stdout) {
+      stdoutOutput =
+        options.format === "text"
+          ? formatBroadcastForCli(broadcast)
+          : JSON.stringify(broadcast, null, 2);
+      const writeFn = options.stdoutWrite ?? ((chunk: string) => process.stdout.write(chunk));
+      writeFn(`${stdoutOutput}\n`);
+    }
 
     this.eventBroker?.emit({
-      type: "broadcast-dumped" as any,
+      type: "broadcast-dumped",
       data: {
         broadcastId: broadcast.broadcastId,
         filePath,
@@ -281,6 +353,7 @@ export class DecisionLogger {
     return {
       broadcast,
       filePath,
+      ...(stdoutOutput !== undefined ? { stdoutOutput } : {}),
     };
   }
 
@@ -288,11 +361,10 @@ export class DecisionLogger {
     this.entries.length = 0;
     this.seq = 1;
     this.startedAt = new Date().toISOString();
-    const rundown = world?.getRundown();
-    this.broadcastId = this.generateBroadcastId(rundown?.title, rundown?.date);
     if (world) {
       world.resetBroadcastSteering();
     }
+    this.broadcastId = this.resolveBroadcastNaming(world).broadcastId;
     return {
       broadcastId: this.broadcastId,
       startedAt: this.startedAt,

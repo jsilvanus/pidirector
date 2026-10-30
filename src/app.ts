@@ -84,9 +84,11 @@ export function buildApp(config: AppConfig, options?: BuildAppOptions): BuildApp
   const ingestor = new EventIngestor({
     gatewayUrl: config.pigatewayUrl,
     picamUrl: config.picamUrl,
+    pitubeUrl: config.pitubeUrl,
     world,
     cameraMotion,
     engine,
+    decisionLogger,
     autoEvaluateOnCue: options?.autoEvaluateOnCue ?? true,
     fetchFn: options?.fetchFn,
     logger: app.log,

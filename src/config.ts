@@ -13,6 +13,7 @@ export interface AppConfig {
   pigatewayUrl: string;
   pirundownUrl: string;
   picamUrl: string;
+  pitubeUrl: string;
   minShotDwellSec: number;
   maxShotDwellSec: number;
   cameraSettleTimeoutMs: number;
@@ -47,6 +48,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const pigatewayUrl = (env["PIGATEWAY_URL"] ?? "http://127.0.0.1:3100").replace(/\/+$/, "");
   const pirundownUrl = (env["PIRUNDOWN_URL"] ?? "http://127.0.0.1:3400").replace(/\/+$/, "");
   const picamUrl = (env["PICAM_URL"] ?? "http://127.0.0.1:3300").replace(/\/+$/, "");
+  const pitubeUrl = (env["PITUBE_URL"] ?? "http://127.0.0.1:3105").replace(/\/+$/, "");
 
   const minShotDwellSec = Number.parseFloat(env["PIDIRECTOR_MIN_SHOT_DWELL_SEC"] ?? "4");
   const maxShotDwellSec = Number.parseFloat(env["PIDIRECTOR_MAX_SHOT_DWELL_SEC"] ?? "30");
@@ -89,6 +91,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     pigatewayUrl,
     pirundownUrl,
     picamUrl,
+    pitubeUrl,
     minShotDwellSec: Number.isNaN(minShotDwellSec) ? 4 : minShotDwellSec,
     maxShotDwellSec: Number.isNaN(maxShotDwellSec) ? 30 : maxShotDwellSec,
     cameraSettleTimeoutMs: Number.isNaN(cameraSettleTimeoutMs) ? 3500 : cameraSettleTimeoutMs,

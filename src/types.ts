@@ -314,6 +314,28 @@ export interface DirectorLogEntry {
   } | undefined;
 }
 
+export type PitubeBroadcastState =
+  | "idle"
+  | "ready"
+  | "testing"
+  | "live"
+  | "complete"
+  | "offline"
+  | "unknown";
+
+export interface PitubeBroadcastSnapshot {
+  available: boolean;
+  state: PitubeBroadcastState;
+  id: string | null;
+  title: string | null;
+  description: string | null;
+  scheduledStartTime: string | null;
+  actualStartTime: string | null;
+  privacy: "public" | "unlisted" | "private" | null;
+  streamHealth: string | null;
+  updatedAt: string | null;
+}
+
 export interface BroadcastStats {
   totalLogs: number;
   totalDecisions: number;
@@ -328,8 +350,16 @@ export interface BroadcastStats {
 
 export interface BroadcastDump {
   broadcastId: string;
+  title: string;
   startedAt: string;
   endedAt: string | null;
+  pitube: {
+    id: string | null;
+    title: string | null;
+    state: PitubeBroadcastState;
+    scheduledStartTime: string | null;
+    actualStartTime: string | null;
+  };
   event: {
     title: string | null;
     service: string | null;

@@ -1,14 +1,19 @@
 import type { DirectorEngine } from "../engine/director-engine.js";
 import type { CameraMotionTracker } from "../state/camera-motion-tracker.js";
+import type { DecisionLogger } from "../state/decision-logger.js";
 import type { WorldTracker } from "../state/world-tracker.js";
+import type { PitubeBroadcastSnapshot } from "../types.js";
 
 export interface EventIngestorOptions {
   gatewayUrl: string;
   picamUrl?: string | undefined;
+  pitubeUrl?: string | undefined;
   world: WorldTracker;
   cameraMotion: CameraMotionTracker;
   engine: DirectorEngine;
+  decisionLogger?: DecisionLogger | undefined;
   autoEvaluateOnCue?: boolean | undefined;
+  autoDumpOnBroadcastEnd?: boolean | undefined;
   fetchFn?: typeof fetch | undefined;
   logger?: {
     info?: (...args: unknown[]) => void;
@@ -20,10 +25,13 @@ export interface EventIngestorOptions {
 export class EventIngestor {
   private readonly gatewayUrl: string;
   private readonly picamUrl?: string | undefined;
+  private readonly pitubeUrl?: string | undefined;
   private readonly world: WorldTracker;
   private readonly cameraMotion: CameraMotionTracker;
   private readonly engine: DirectorEngine;
+  private readonly decisionLogger?: DecisionLogger | undefined;
   private readonly autoEvaluateOnCue: boolean;
+  private readonly autoDumpOnBroadcastEnd: boolean;
   private readonly fetchFn: typeof fetch;
   private readonly logger: EventIngestorOptions["logger"];
 
@@ -33,12 +41,38 @@ export class EventIngestor {
   constructor(options: EventIngestorOptions) {
     this.gatewayUrl = options.gatewayUrl.replace(/\/+$/, "");
     this.picamUrl = options.picamUrl?.replace(/\/+$/, "");
+    this.pitubeUrl = options.pitubeUrl?.replace(/\/+$/, "");
     this.world = options.world;
     this.cameraMotion = options.cameraMotion;
     this.engine = options.engine;
+    this.decisionLogger = options.decisionLogger;
     this.autoEvaluateOnCue = options.autoEvaluateOnCue ?? true;
+    this.autoDumpOnBroadcastEnd = options.autoDumpOnBroadcastEnd ?? true;
     this.fetchFn = options.fetchFn ?? globalThis.fetch;
     this.logger = options.logger;
+  }
+
+  /**
+   * Queries pitube's GET /api/v1/status endpoint to sync current broadcast state and title.
+   * Returns null if pitube is unreachable or no pitubeUrl is configured.
+   */
+  async syncPitubeBroadcast(): Promise<PitubeBroadcastSnapshot | null> {
+    if (!this.pitubeUrl) return null;
+    try {
+      const res = await this.fetchFn(`${this.pitubeUrl}/api/v1/status`, {
+        method: "GET",
+      });
+      if (!res.ok) return null;
+      const body = (await res.json()) as Record<string, any>;
+      if (!body || (body["service"] !== "pitube" && !("selectedBroadcast" in body) && !("broadcast" in body))) {
+        return null;
+      }
+      const updated = this.world.updateBroadcast(body);
+      this.decisionLogger?.getBroadcastId(this.world);
+      return updated;
+    } catch {
+      return null;
+    }
   }
 
   isConnected(): boolean {
@@ -142,6 +176,31 @@ export class EventIngestor {
         break;
       }
 
+      case "pitube":
+      case "youtube":
+      case "youtube.status":
+      case "broadcast": {
+        const prevState = this.world.getBroadcast().state;
+        let updated = this.world.updateBroadcast(data ?? {});
+        if (!updated.title && this.pitubeUrl) {
+          const synced = await this.syncPitubeBroadcast();
+          if (synced) {
+            updated = synced;
+          }
+        }
+        this.decisionLogger?.getBroadcastId(this.world);
+
+        if (
+          this.autoDumpOnBroadcastEnd &&
+          prevState === "live" &&
+          (updated.state === "complete" || updated.state === "idle" || updated.state === "offline")
+        ) {
+          this.engine.stop("Pitube broadcast ended", "pitube");
+          this.decisionLogger?.dumpBroadcast(this.world, { reset: true });
+        }
+        break;
+      }
+
       case "world-state": {
         if (data?.["switcher"]) {
           this.world.updateAtem(data["switcher"]);
@@ -151,6 +210,12 @@ export class EventIngestor {
         }
         if (data?.["spatial"]) {
           this.world.updateSpatial(data["spatial"]);
+        }
+        if (data?.["pitube"] ?? data?.["youtube"] ?? data?.["broadcast"]) {
+          await this.handleEvent(
+            "pitube",
+            data["pitube"] ?? data["youtube"] ?? data["broadcast"]
+          );
         }
         if (data?.["ceremony"]) {
           this.world.updateRundownContext({
