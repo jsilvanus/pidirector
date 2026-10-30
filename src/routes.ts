@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { DirectorEngine } from "./engine/director-engine.js";
@@ -7,6 +8,10 @@ import type { OllamaDirectorClient } from "./ollama/client.js";
 import type { CameraMotionTracker } from "./state/camera-motion-tracker.js";
 import type { WorldTracker } from "./state/world-tracker.js";
 import { DirectorModeSchema, HumanSteeringPatchSchema } from "./types.js";
+
+const openApiSpec = JSON.parse(
+  readFileSync(new URL("../openapi/openapi.json", import.meta.url), "utf8")
+);
 
 export interface RouteDependencies {
   engine: DirectorEngine;
@@ -25,8 +30,13 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
       status: "ok",
       service: "pidirector",
       mode: engine.getMode(),
+      lastActiveMode: engine.getLastActiveMode(),
       time: new Date().toISOString(),
     };
+  });
+
+  app.get("/openapi.json", async () => {
+    return openApiSpec;
   });
 
   app.get("/api/v1/status", async () => {
@@ -34,6 +44,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
     return {
       service: "pidirector",
       mode: engine.getMode(),
+      lastActiveMode: engine.getLastActiveMode(),
       ollamaHealthy,
       sseConnected: ingestor.isConnected(),
       switcher: world.getSwitcher(),
@@ -73,6 +84,77 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
     request.raw.on("close", () => {
       unsubscribe();
     });
+  });
+
+  app.post("/api/v1/start", async (request, reply) => {
+    const bodySchema = z
+      .object({
+        mode: z.enum(["autonomous", "advisory"]).default("autonomous"),
+        reason: z.string().optional(),
+        evaluateNow: z.boolean().default(false),
+      })
+      .default({});
+    const parsed = bodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "Invalid start payload",
+        details: parsed.error.format(),
+      });
+    }
+
+    const res = engine.start(parsed.data.mode, parsed.data.reason);
+    const evaluation = parsed.data.evaluateNow
+      ? await engine.evaluate("director_started", { tier: "reasoning" })
+      : undefined;
+
+    return {
+      ok: true,
+      ...res,
+      ...(evaluation ? { evaluation } : {}),
+    };
+  });
+
+  app.post("/api/v1/stop", async (request) => {
+    const body = (request.body ?? {}) as {
+      reason?: string;
+      actor?: string;
+    };
+    const res = engine.stop(
+      body.reason ?? "Operator stopped director",
+      body.actor ?? "operator"
+    );
+    return {
+      ok: true,
+      ...res,
+    };
+  });
+
+  app.post("/api/v1/continue", async (request, reply) => {
+    const bodySchema = z
+      .object({
+        mode: z.enum(["autonomous", "advisory"]).optional(),
+        reason: z.string().optional(),
+        evaluateNow: z.boolean().default(false),
+      })
+      .default({});
+    const parsed = bodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "Invalid continue payload",
+        details: parsed.error.format(),
+      });
+    }
+
+    const res = engine.continue(parsed.data.mode, parsed.data.reason);
+    const evaluation = parsed.data.evaluateNow
+      ? await engine.evaluate("director_continued", { tier: "reasoning" })
+      : undefined;
+
+    return {
+      ok: true,
+      ...res,
+      ...(evaluation ? { evaluation } : {}),
+    };
   });
 
   app.post("/api/v1/mode", async (request, reply) => {

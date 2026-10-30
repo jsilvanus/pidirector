@@ -36,6 +36,7 @@ const ZONE_DEFAULT_CAMERA: Record<string, { input: number; preset: string }> = {
 
 export class DirectorEngine {
   private mode: DirectorMode;
+  private lastActiveMode: "autonomous" | "advisory";
   private readonly world: WorldTracker;
   private readonly cameraMotion: CameraMotionTracker;
   private readonly guardrails: GuardrailEngine;
@@ -51,6 +52,7 @@ export class DirectorEngine {
 
   constructor(options: DirectorEngineOptions) {
     this.mode = options.initialMode;
+    this.lastActiveMode = options.initialMode === "autonomous" ? "autonomous" : "advisory";
     this.world = options.world;
     this.cameraMotion = options.cameraMotion;
     this.guardrails = options.guardrails;
@@ -64,8 +66,15 @@ export class DirectorEngine {
     return this.mode;
   }
 
+  getLastActiveMode(): "autonomous" | "advisory" {
+    return this.lastActiveMode;
+  }
+
   setMode(newMode: DirectorMode, reason?: string): DirectorMode {
     const previousMode = this.mode;
+    if (newMode === "autonomous" || newMode === "advisory") {
+      this.lastActiveMode = newMode;
+    }
     if (previousMode === newMode) return this.mode;
 
     if (newMode === "manual" && this.activeTurnAbort) {
@@ -87,6 +96,55 @@ export class DirectorEngine {
   }
 
   /**
+   * Start directing in either autonomous (default) or advisory mode.
+   */
+  start(targetMode: "autonomous" | "advisory" = "autonomous", reason = "Operator started director"): {
+    previousMode: DirectorMode;
+    mode: DirectorMode;
+  } {
+    const previousMode = this.mode;
+    const mode = this.setMode(targetMode, reason);
+    return { previousMode, mode };
+  }
+
+  /**
+   * Stop/pause directing: immediately aborts any in-flight inference or camera settle wait (<5ms)
+   * and transitions to manual (standby) mode while remembering lastActiveMode for continue().
+   */
+  stop(reason = "Operator stopped director", actor = "operator"): {
+    preemptedTurn: boolean;
+    previousMode: DirectorMode;
+    newMode: DirectorMode;
+    resumableMode: "autonomous" | "advisory";
+  } {
+    if (this.mode === "autonomous" || this.mode === "advisory") {
+      this.lastActiveMode = this.mode;
+    }
+    const res = this.preempt(reason, actor);
+    return {
+      ...res,
+      resumableMode: this.lastActiveMode,
+    };
+  }
+
+  /**
+   * Continue/resume directing after a stop or human preemption, restoring the previous active mode
+   * (or an explicitly requested mode) and resetting the shot dwell timer.
+   */
+  continue(
+    targetMode?: "autonomous" | "advisory",
+    reason = "Operator continued director"
+  ): {
+    previousMode: DirectorMode;
+    mode: DirectorMode;
+  } {
+    const previousMode = this.mode;
+    const resumeTo = targetMode ?? this.lastActiveMode;
+    const mode = this.setMode(resumeTo, reason);
+    return { previousMode, mode };
+  }
+
+  /**
    * Out-of-band <5ms human preemption.
    * Immediately aborts any in-flight Ollama deliberation or FreeD camera settle wait,
    * clears pending advisories, resets dwell timer, and switches to manual mode (unless keepMode=true).
@@ -101,6 +159,9 @@ export class DirectorEngine {
     newMode: DirectorMode;
   } {
     const previousMode = this.mode;
+    if (previousMode === "autonomous" || previousMode === "advisory") {
+      this.lastActiveMode = previousMode;
+    }
     let preemptedTurn = false;
 
     if (this.activeTurnAbort) {

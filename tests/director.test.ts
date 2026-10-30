@@ -413,6 +413,49 @@ test("Human entry points: Advisory mode accept/dismiss, live steering API, and <
     url: "/api/v1/status",
   });
   assert.equal(statusRes.json().mode, "manual");
+  assert.equal(statusRes.json().lastActiveMode, "autonomous");
+
+  // 6. Continue / resume after preemption restores previous active mode ("autonomous")
+  const continueRes = await app.inject({
+    method: "POST",
+    url: "/api/v1/continue",
+    payload: { reason: "Resuming after manual cut" },
+  });
+  assert.equal(continueRes.statusCode, 200);
+  assert.equal(continueRes.json().previousMode, "manual");
+  assert.equal(continueRes.json().mode, "autonomous");
+
+  // 7. Stop pauses into manual mode while remembering lastActiveMode
+  const stopRes = await app.inject({
+    method: "POST",
+    url: "/api/v1/stop",
+    payload: { reason: "Pausing for announcements" },
+  });
+  assert.equal(stopRes.statusCode, 200);
+  assert.equal(stopRes.json().newMode, "manual");
+  assert.equal(stopRes.json().resumableMode, "autonomous");
+
+  // 8. Start explicitly in advisory mode
+  const startRes = await app.inject({
+    method: "POST",
+    url: "/api/v1/start",
+    payload: { mode: "advisory", reason: "Start co-pilot mode" },
+  });
+  assert.equal(startRes.statusCode, 200);
+  assert.equal(startRes.json().mode, "advisory");
+
+  // 9. OpenAPI spec endpoint serves valid 3.1.0 specification
+  const openApiRes = await app.inject({
+    method: "GET",
+    url: "/openapi.json",
+  });
+  assert.equal(openApiRes.statusCode, 200);
+  const spec = openApiRes.json();
+  assert.equal(spec.openapi, "3.1.0");
+  assert.ok(spec.paths["/api/v1/start"]);
+  assert.ok(spec.paths["/api/v1/stop"]);
+  assert.ok(spec.paths["/api/v1/continue"]);
+  assert.ok(spec.paths["/api/v1/steer"]);
 
   await app.close();
 });

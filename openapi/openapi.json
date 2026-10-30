@@ -1,0 +1,394 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "pidirector — Local AI Stream Director API",
+    "version": "0.1.0",
+    "description": "Autonomous and semi-autonomous Local AI Broadcast Director for live worship services in the Pi Ecosystem. Supports FreeD camera motion/settle guardrails, Rundown v2 AI instructions, local Ollama structured inference, and sub-5ms human steering and preemption."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:3450",
+      "description": "Local pidirector daemon"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Service health and active mode check",
+        "responses": {
+          "200": {
+            "description": "Service is healthy"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiSpec",
+        "summary": "Retrieve the OpenAPI 3.1.0 specification",
+        "responses": {
+          "200": {
+            "description": "OpenAPI JSON document"
+          }
+        }
+      }
+    },
+    "/api/v1/status": {
+      "get": {
+        "operationId": "getStatus",
+        "summary": "Complete director status including mode, switcher, FreeD camera motion states, audio, spatial zones, rundown AI context, human steering, and pending advisory",
+        "responses": {
+          "200": {
+            "description": "Full director state snapshot"
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "operationId": "streamEvents",
+        "summary": "Server-Sent Events (SSE) stream of director decisions, advisories, FreeD camera motion transitions, mode changes, and preemptions",
+        "responses": {
+          "200": {
+            "description": "text/event-stream SSE feed"
+          }
+        }
+      }
+    },
+    "/api/v1/start": {
+      "post": {
+        "operationId": "startDirector",
+        "summary": "Start AI directing in autonomous (default) or advisory mode, optionally triggering an immediate evaluation",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["autonomous", "advisory"],
+                    "default": "autonomous"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "evaluateNow": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Director started"
+          }
+        }
+      }
+    },
+    "/api/v1/stop": {
+      "post": {
+        "operationId": "stopDirector",
+        "summary": "Stop/pause AI directing immediately (<5ms abort of active Ollama inference and camera settle wait) and switch to manual standby mode",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  },
+                  "actor": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Director stopped and switched to manual mode"
+          }
+        }
+      }
+    },
+    "/api/v1/continue": {
+      "post": {
+        "operationId": "continueDirector",
+        "summary": "Continue/resume AI directing after a stop or human override, restoring the previous active mode (autonomous or advisory)",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["autonomous", "advisory"]
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "evaluateNow": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Director resumed"
+          }
+        }
+      }
+    },
+    "/api/v1/mode": {
+      "post": {
+        "operationId": "setMode",
+        "summary": "Switch operating mode between autonomous, advisory, and manual",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["mode"],
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["autonomous", "advisory", "manual"]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mode updated"
+          }
+        }
+      }
+    },
+    "/api/v1/steer": {
+      "get": {
+        "operationId": "getSteering",
+        "summary": "Get active human steering directives and effective constraints",
+        "responses": {
+          "200": {
+            "description": "Current steering state"
+          }
+        }
+      },
+      "post": {
+        "operationId": "updateSteering",
+        "summary": "Update live human steering directives (natural-language instruction, camera lock, excluded cameras, pacing, dwell time, privacy constraints)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "instruction": { "type": ["string", "null"] },
+                  "pacing": {
+                    "type": ["string", "null"],
+                    "enum": ["meditative", "calm", "liturgical", "dynamic", "brisk", null]
+                  },
+                  "lockCamera": { "type": ["integer", "null"], "minimum": 1 },
+                  "excludeCameras": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 1 }
+                  },
+                  "minShotDwellSec": { "type": ["number", "null"] },
+                  "maxShotDwellSec": { "type": ["number", "null"] },
+                  "disallowCongregationCloseup": { "type": ["boolean", "null"] },
+                  "avoidCutsDuringPrayer": { "type": ["boolean", "null"] },
+                  "disallowMoveWhileOnAir": { "type": ["boolean", "null"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Steering updated"
+          }
+        }
+      }
+    },
+    "/api/v1/preempt": {
+      "post": {
+        "operationId": "preemptDirector",
+        "summary": "Emergency <5ms human takeover: aborts active Ollama inference and pending camera-settle wait",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": { "type": "string" },
+                  "actor": { "type": "string" },
+                  "keepMode": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Preemption executed"
+          }
+        }
+      }
+    },
+    "/api/v1/evaluate": {
+      "post": {
+        "operationId": "evaluateDirector",
+        "summary": "Trigger an immediate directorial evaluation cycle",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "trigger": { "type": "string" },
+                  "tier": { "type": "string", "enum": ["fast", "reasoning"] },
+                  "bypassDwell": { "type": "boolean" },
+                  "forceWhenManual": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Evaluation completed"
+          }
+        }
+      }
+    },
+    "/api/v1/advisory": {
+      "get": {
+        "operationId": "getPendingAdvisory",
+        "summary": "Get the current pending advisory shot in co-pilot mode",
+        "responses": {
+          "200": {
+            "description": "Pending advisory shot or null"
+          }
+        }
+      }
+    },
+    "/api/v1/advisory/{id}/accept": {
+      "post": {
+        "operationId": "acceptAdvisory",
+        "summary": "Accept and execute a pending co-pilot advisory shot",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Advisory shot executed via picontrol-mcp"
+          }
+        }
+      }
+    },
+    "/api/v1/advisory/{id}/dismiss": {
+      "post": {
+        "operationId": "dismissAdvisory",
+        "summary": "Dismiss a pending co-pilot advisory shot",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Advisory dismissed"
+          }
+        }
+      }
+    },
+    "/api/v1/cameras": {
+      "get": {
+        "operationId": "getCameras",
+        "summary": "Inspect FreeD camera motion and settled preset states",
+        "responses": {
+          "200": {
+            "description": "Per-camera motion snapshots"
+          }
+        }
+      }
+    },
+    "/api/v1/ingest/event": {
+      "post": {
+        "operationId": "ingestEvent",
+        "summary": "Ingest a gateway, camera, FreeD, or rundown event",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                  "type": { "type": "string" },
+                  "data": { "type": "object" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Event ingested"
+          }
+        }
+      }
+    },
+    "/api/v1/history": {
+      "get": {
+        "operationId": "getHistory",
+        "summary": "Get audit history of recent decisions, guardrail verdicts, and MCP calls",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "default": 30 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Decision history list"
+          }
+        }
+      }
+    }
+  }
+}

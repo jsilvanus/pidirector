@@ -23,6 +23,49 @@ async function run(): Promise<void> {
       break;
     }
 
+    case "openapi": {
+      const data = await request("/openapi.json");
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+
+    case "start": {
+      const modeArg = args[0]?.toLowerCase();
+      const mode =
+        modeArg === "advisory" || modeArg === "autonomous" ? modeArg : "autonomous";
+      const reason =
+        modeArg === "advisory" || modeArg === "autonomous"
+          ? args.slice(1).join(" ") || "CLI operator start"
+          : args.join(" ") || "CLI operator start";
+      const data = await request("/api/v1/start", "POST", { mode, reason });
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+
+    case "stop": {
+      const reason = args.join(" ").trim() || "CLI operator stop";
+      const data = await request("/api/v1/stop", "POST", { reason, actor: "cli-operator" });
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+
+    case "continue":
+    case "resume": {
+      const modeArg = args[0]?.toLowerCase();
+      const mode =
+        modeArg === "advisory" || modeArg === "autonomous" ? modeArg : undefined;
+      const reason =
+        mode !== undefined
+          ? args.slice(1).join(" ") || "CLI operator continue"
+          : args.join(" ") || "CLI operator continue";
+      const data = await request("/api/v1/continue", "POST", {
+        ...(mode ? { mode } : {}),
+        reason,
+      });
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+
     case "mode": {
       const targetMode = args[0];
       if (!targetMode || !["autonomous", "advisory", "manual"].includes(targetMode)) {
@@ -38,12 +81,30 @@ async function run(): Promise<void> {
     case "steer": {
       const sub = args[0];
       if (sub === "lock") {
-        const cam = args[1] === "off" || args[1] === "none" ? null : Number.parseInt(args[1] ?? "", 10);
+        const cam =
+          args[1] === "off" || args[1] === "none" ? null : Number.parseInt(args[1] ?? "", 10);
         const data = await request("/api/v1/steer", "POST", { lockCamera: cam });
+        console.log(JSON.stringify(data, null, 2));
+      } else if (sub === "exclude") {
+        const cams =
+          args[1] === "off" || args[1] === "none" || !args[1]
+            ? []
+            : args[1]
+                .split(",")
+                .map((s) => Number.parseInt(s.trim(), 10))
+                .filter((n) => !Number.isNaN(n));
+        const data = await request("/api/v1/steer", "POST", { excludeCameras: cams });
         console.log(JSON.stringify(data, null, 2));
       } else if (sub === "pacing") {
         const pacing = args[1] === "reset" ? null : args[1];
         const data = await request("/api/v1/steer", "POST", { pacing });
+        console.log(JSON.stringify(data, null, 2));
+      } else if (sub === "dwell") {
+        const sec =
+          args[1] === "reset" ? null : Number.parseFloat(args[1] ?? "");
+        const data = await request("/api/v1/steer", "POST", {
+          minShotDwellSec: Number.isNaN(sec as number) ? null : sec,
+        });
         console.log(JSON.stringify(data, null, 2));
       } else {
         const instruction = args.join(" ").trim() || null;
@@ -104,18 +165,28 @@ async function run(): Promise<void> {
     default: {
       console.log(`pidirector CLI — Local AI Stream Director (${baseUrl})
 
-Commands:
-  pidirector status                                  Show live director, camera motion, switcher & steering state
-  pidirector mode <autonomous|advisory|manual>       Switch director operating mode
-  pidirector steer "<instruction>"                   Set live human steering directive
-  pidirector steer lock <1|2|3|off>                  Lock or unlock a specific camera input
-  pidirector steer pacing <calm|liturgical|dynamic>  Override broadcast pacing
+Lifecycle Commands:
+  pidirector start [autonomous|advisory] [reason]    Start AI directing (defaults to autonomous)
+  pidirector stop [reason]                           Stop/pause AI directing (<5ms abort -> manual mode)
+  pidirector continue [autonomous|advisory]          Resume AI directing into previous active mode
   pidirector preempt [reason]                        Immediate <5ms human takeover & abort
+  pidirector mode <autonomous|advisory|manual>       Explicitly set director operating mode
+
+Steering Commands:
+  pidirector steer "<instruction>"                   Set live natural-language directive
+  pidirector steer lock <1|2|3|off>                  Lock or unlock a specific camera input
+  pidirector steer exclude <1,2|off>                 Exclude specific cameras from AI selection
+  pidirector steer pacing <calm|liturgical|dynamic>  Override broadcast pacing
+  pidirector steer dwell <seconds|reset>             Override minimum shot dwell time
+
+Co-Pilot & Inspection Commands:
+  pidirector status                                  Show live director, camera motion, switcher & steering state
   pidirector evaluate [trigger]                      Trigger an immediate shot evaluation
   pidirector accept <advisoryId>                     Accept & execute a pending advisory shot
   pidirector dismiss <advisoryId>                    Dismiss a pending advisory shot
   pidirector cameras                                 Inspect FreeD camera motion & settled states
-  pidirector history                                 View recent directorial decisions & MCP calls`);
+  pidirector history                                 View recent directorial decisions & MCP calls
+  pidirector openapi                                 Print the OpenAPI 3.1.0 specification`);
       break;
     }
   }
