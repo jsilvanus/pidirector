@@ -82,7 +82,60 @@ async function run(): Promise<void> {
 
     case "steer": {
       const sub = args[0];
-      if (sub === "lock") {
+      if (sub === "list") {
+        const data = await request("/api/v1/steer");
+        console.log(JSON.stringify(data.steering, null, 2));
+      } else if (sub === "note") {
+        const scopeArg = args[1]?.toLowerCase();
+        const validScopes = ["broadcast", "section", "subsection", "timer"];
+        const scope = validScopes.includes(scopeArg ?? "") ? scopeArg! : "broadcast";
+        let duration: string | number | undefined;
+        let textStartIdx = validScopes.includes(scopeArg ?? "") ? 2 : 1;
+        if (scope === "timer" && args[textStartIdx]) {
+          duration = args[textStartIdx];
+          textStartIdx += 1;
+        }
+        const text = args.slice(textStartIdx).join(" ").trim();
+        if (!text) {
+          console.error(
+            'Usage: pidirector steer note <broadcast|section|subsection|timer> [duration] "<text>"'
+          );
+          process.exit(1);
+        }
+        const data = await request("/api/v1/steer/notes", "POST", {
+          text,
+          scope,
+          ...(duration !== undefined ? { duration } : {}),
+        });
+        console.log(JSON.stringify(data, null, 2));
+      } else if (sub === "toggle") {
+        const noteId = args[1];
+        if (!noteId) {
+          console.error("Usage: pidirector steer toggle <noteId> [on|off]");
+          process.exit(1);
+        }
+        const stateArg = args[2]?.toLowerCase();
+        const enabled =
+          stateArg === "on" || stateArg === "true"
+            ? true
+            : stateArg === "off" || stateArg === "false"
+              ? false
+              : undefined;
+        const data = await request(
+          `/api/v1/steer/notes/${encodeURIComponent(noteId)}/toggle`,
+          "POST",
+          enabled !== undefined ? { enabled } : {}
+        );
+        console.log(JSON.stringify(data, null, 2));
+      } else if (sub === "remove" || sub === "delete") {
+        const noteId = args[1];
+        if (!noteId) {
+          console.error("Usage: pidirector steer remove <noteId>");
+          process.exit(1);
+        }
+        const data = await request(`/api/v1/steer/notes/${encodeURIComponent(noteId)}`, "DELETE");
+        console.log(JSON.stringify(data, null, 2));
+      } else if (sub === "lock") {
         const cam =
           args[1] === "off" || args[1] === "none" ? null : Number.parseInt(args[1] ?? "", 10);
         const data = await request("/api/v1/steer", "POST", { lockCamera: cam });
@@ -92,9 +145,9 @@ async function run(): Promise<void> {
           args[1] === "off" || args[1] === "none" || !args[1]
             ? []
             : args[1]
-                .split(",")
-                .map((s) => Number.parseInt(s.trim(), 10))
-                .filter((n) => !Number.isNaN(n));
+                 .split(",")
+                 .map((s) => Number.parseInt(s.trim(), 10))
+                 .filter((n) => !Number.isNaN(n));
         const data = await request("/api/v1/steer", "POST", { excludeCameras: cams });
         console.log(JSON.stringify(data, null, 2));
       } else if (sub === "pacing") {
@@ -187,11 +240,15 @@ Lifecycle Commands:
   pidirector mode <autonomous|advisory|manual>       Explicitly set director operating mode
 
 Steering Commands:
-  pidirector steer "<instruction>"                   Set live natural-language directive
-  pidirector steer lock <1|2|3|off>                  Lock or unlock a specific camera input
-  pidirector steer exclude <1,2|off>                 Exclude specific cameras from AI selection
-  pidirector steer pacing <calm|liturgical|dynamic>  Override broadcast pacing
-  pidirector steer dwell <seconds|reset>             Override minimum shot dwell time
+  pidirector steer "<instruction>"                                     Set broadcast steering directive
+  pidirector steer note <broadcast|section|subsection|timer> [dur] ..  Add scoped steering note (e.g. timer 2:00)
+  pidirector steer toggle <noteId> [on|off]                            Toggle a steering note on or off
+  pidirector steer remove <noteId>                                     Remove a steering note
+  pidirector steer list                                                List all steering notes & overrides
+  pidirector steer lock <1|2|3|off>                                    Lock or unlock a specific camera input
+  pidirector steer exclude <1,2|off>                                   Exclude specific cameras from AI selection
+  pidirector steer pacing <calm|liturgical|dynamic>                    Override broadcast pacing
+  pidirector steer dwell <seconds|reset>                               Override minimum shot dwell time
 
 Co-Pilot & Inspection Commands:
   pidirector status                                  Show live director, camera motion, switcher & steering state

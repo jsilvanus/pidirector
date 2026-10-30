@@ -1,10 +1,13 @@
 import type { DirectorEventBroker } from "../events.js";
-import type {
-  AiConstraints,
-  AiGeneralInstructions,
-  AiItemInstructions,
-  HumanSteeringPatch,
-  HumanSteeringState,
+import {
+  parseSteeringDurationSec,
+  type AiConstraints,
+  type AiGeneralInstructions,
+  type AiItemInstructions,
+  type HumanSteeringPatch,
+  type HumanSteeringState,
+  type SteeringNote,
+  type SteeringNoteCreate,
 } from "../types.js";
 
 export interface SwitcherSnapshot {
@@ -184,6 +187,8 @@ export class WorldTracker {
 
   private steering: HumanSteeringState = {
     instruction: null,
+    notes: [],
+    activeNotes: [],
     pacing: null,
     lockCamera: null,
     excludeCameras: [],
@@ -195,6 +200,7 @@ export class WorldTracker {
     updatedAt: null,
   };
 
+  private steeringNoteSeq = 1;
   private readonly transcripts: Array<{ text: string; timestamp: string }> = [];
 
   constructor(eventBroker?: DirectorEventBroker, initialMinDwellSec = 4, initialMaxDwellSec = 30) {
@@ -437,17 +443,207 @@ export class WorldTracker {
     if (data.defaultActions !== undefined) {
       this.rundown.defaultActions = data.defaultActions;
     }
+
+    this.expireScopedSteeringNotes();
   }
 
-  getSteering(): HumanSteeringState {
+  private getCurrentSectionKey(): string | null {
+    return (
+      this.rundown.progress?.section?.id ??
+      this.rundown.progress?.section?.title ??
+      this.rundown.currentSection ??
+      null
+    );
+  }
+
+  private getCurrentSubsectionKey(): string | null {
+    return (
+      this.rundown.progress?.subsection?.id ??
+      this.rundown.currentCueId ??
+      this.rundown.currentCueTitle ??
+      null
+    );
+  }
+
+  private expireScopedSteeringNotes(nowMs = Date.now()): boolean {
+    let changed = false;
+    const currentSectionKey = this.getCurrentSectionKey();
+    const currentSubsectionKey = this.getCurrentSubsectionKey();
+
+    for (const note of this.steering.notes) {
+      if (note.expired) continue;
+
+      if (note.expiresAt) {
+        const expMs = Date.parse(note.expiresAt);
+        if (!Number.isNaN(expMs) && nowMs >= expMs) {
+          note.expired = true;
+          note.expiredReason = "timer_expired";
+          changed = true;
+          continue;
+        }
+      }
+
+      if (
+        note.scope === "subsection" &&
+        note.subsectionKey &&
+        currentSubsectionKey &&
+        note.subsectionKey !== currentSubsectionKey
+      ) {
+        note.expired = true;
+        note.expiredReason = "subsection_changed";
+        changed = true;
+        continue;
+      }
+
+      if (
+        note.scope === "section" &&
+        note.sectionKey &&
+        currentSectionKey &&
+        note.sectionKey !== currentSectionKey
+      ) {
+        note.expired = true;
+        note.expiredReason = "section_changed";
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.syncSteeringSummary(nowMs);
+      this.eventBroker?.emit({ type: "steering-updated", data: this.getSteering(nowMs) });
+    }
+    return changed;
+  }
+
+  private syncSteeringSummary(nowMs = Date.now()): void {
+    const active: SteeringNote[] = [];
+    for (const note of this.steering.notes) {
+      if (note.expiresAt && !note.expired) {
+        const expMs = Date.parse(note.expiresAt);
+        if (!Number.isNaN(expMs)) {
+          if (nowMs >= expMs) {
+            note.expired = true;
+            note.expiredReason = "timer_expired";
+          } else {
+            note.remainingSec = Math.max(0, Math.ceil((expMs - nowMs) / 1000));
+          }
+        }
+      } else if (note.expired) {
+        note.remainingSec = 0;
+      }
+
+      if (note.enabled && !note.expired) {
+        active.push({ ...note });
+      }
+    }
+
+    this.steering.activeNotes = active;
+    this.steering.instruction =
+      active.length > 0 ? active.map((n) => n.text).join(" | ") : null;
+  }
+
+  getSteering(nowMs = Date.now()): HumanSteeringState {
+    this.syncSteeringSummary(nowMs);
     return {
       ...this.steering,
+      notes: this.steering.notes.map((n) => ({ ...n })),
+      activeNotes: this.steering.activeNotes.map((n) => ({ ...n })),
       excludeCameras: [...this.steering.excludeCameras],
     };
   }
 
-  updateSteering(patch: HumanSteeringPatch): HumanSteeringState {
-    if (patch.instruction !== undefined) this.steering.instruction = patch.instruction;
+  addSteeringNote(input: SteeringNoteCreate, nowMs = Date.now()): SteeringNote {
+    const durationSec = parseSteeringDurationSec(input.duration);
+    const scope = input.scope ?? (durationSec !== null ? "timer" : "broadcast");
+    const createdAt = new Date(nowMs).toISOString();
+    const expiresAt =
+      durationSec !== null ? new Date(nowMs + durationSec * 1000).toISOString() : null;
+
+    const note: SteeringNote = {
+      id: `note_${this.steeringNoteSeq++}`,
+      text: input.text.trim(),
+      scope,
+      enabled: input.enabled ?? true,
+      expired: false,
+      expiredReason: null,
+      createdAt,
+      sectionKey: scope === "section" ? this.getCurrentSectionKey() : null,
+      subsectionKey: scope === "subsection" ? this.getCurrentSubsectionKey() : null,
+      durationSec,
+      expiresAt,
+      remainingSec: durationSec,
+    };
+
+    this.steering.notes.push(note);
+    this.steering.updatedAt = createdAt;
+    const snap = this.getSteering(nowMs);
+    this.eventBroker?.emit({ type: "steering-updated", data: snap });
+    return { ...note };
+  }
+
+  toggleSteeringNote(id: string, enabled?: boolean, nowMs = Date.now()): SteeringNote | null {
+    const note = this.steering.notes.find((n) => n.id === id);
+    if (!note) return null;
+
+    const nextEnabled = enabled !== undefined ? enabled : !note.enabled;
+    note.enabled = nextEnabled;
+
+    // If re-enabling an expired note, refresh its scope binding / timer so the operator can reuse it
+    if (nextEnabled && note.expired) {
+      note.expired = false;
+      note.expiredReason = null;
+      if (note.scope === "section") {
+        note.sectionKey = this.getCurrentSectionKey();
+      } else if (note.scope === "subsection") {
+        note.subsectionKey = this.getCurrentSubsectionKey();
+      }
+      if (note.durationSec && note.durationSec > 0) {
+        note.expiresAt = new Date(nowMs + note.durationSec * 1000).toISOString();
+        note.remainingSec = note.durationSec;
+      }
+    }
+
+    this.steering.updatedAt = new Date(nowMs).toISOString();
+    const snap = this.getSteering(nowMs);
+    this.eventBroker?.emit({ type: "steering-updated", data: snap });
+    return { ...note };
+  }
+
+  removeSteeringNote(id: string, nowMs = Date.now()): boolean {
+    const idx = this.steering.notes.findIndex((n) => n.id === id);
+    if (idx < 0) return false;
+    this.steering.notes.splice(idx, 1);
+    this.steering.updatedAt = new Date(nowMs).toISOString();
+    const snap = this.getSteering(nowMs);
+    this.eventBroker?.emit({ type: "steering-updated", data: snap });
+    return true;
+  }
+
+  updateSteering(patch: HumanSteeringPatch, nowMs = Date.now()): HumanSteeringState {
+    if (patch.instruction !== undefined) {
+      if (patch.instruction === null || patch.instruction.trim() === "") {
+        this.steering.notes = [];
+      } else {
+        const durationSec = parseSteeringDurationSec(patch.duration);
+        const scope = patch.scope ?? (durationSec !== null ? "timer" : "broadcast");
+        const createdAt = new Date(nowMs).toISOString();
+        const expiresAt =
+          durationSec !== null ? new Date(nowMs + durationSec * 1000).toISOString() : null;
+        this.steering.notes.push({
+          id: `note_${this.steeringNoteSeq++}`,
+          text: patch.instruction.trim(),
+          scope,
+          enabled: true,
+          expired: false,
+          expiredReason: null,
+          createdAt,
+          sectionKey: scope === "section" ? this.getCurrentSectionKey() : null,
+          subsectionKey: scope === "subsection" ? this.getCurrentSubsectionKey() : null,
+          durationSec,
+          expiresAt,
+          remainingSec: durationSec,
+        });
+      }
+    }
     if (patch.pacing !== undefined) this.steering.pacing = patch.pacing;
     if (patch.lockCamera !== undefined) this.steering.lockCamera = patch.lockCamera;
     if (patch.excludeCameras !== undefined) this.steering.excludeCameras = [...patch.excludeCameras];
@@ -462,9 +658,9 @@ export class WorldTracker {
     if (patch.disallowMoveWhileOnAir !== undefined) {
       this.steering.disallowMoveWhileOnAir = patch.disallowMoveWhileOnAir;
     }
-    this.steering.updatedAt = new Date().toISOString();
+    this.steering.updatedAt = new Date(nowMs).toISOString();
 
-    const snap = this.getSteering();
+    const snap = this.getSteering(nowMs);
     this.eventBroker?.emit({ type: "steering-updated", data: snap });
     return snap;
   }

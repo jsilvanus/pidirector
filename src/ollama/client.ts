@@ -158,7 +158,20 @@ Hard Broadcast Rules:
         aiInstructions: rundown.currentItemAi,
       },
       nextItem: rundown.nextItem,
-      humanSteering: steering,
+      humanSteering: {
+        instruction: steering.instruction,
+        activeNotes: steering.activeNotes.map((n) => ({
+          id: n.id,
+          text: n.text,
+          scope: n.scope,
+          remainingSec: n.remainingSec ?? null,
+        })),
+        pacing: steering.pacing,
+        lockCamera: steering.lockCamera,
+        excludeCameras: steering.excludeCameras,
+        minShotDwellSec: steering.minShotDwellSec,
+        maxShotDwellSec: steering.maxShotDwellSec,
+      },
       recentDecisions: rollingShots,
       recentTranscripts: transcripts
         .slice(-this.rollingTranscriptWindow)

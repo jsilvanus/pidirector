@@ -718,3 +718,132 @@ test("Rundown situational awareness: placeInEvent, hierarchical timing, nextItem
 
   await app.close();
 });
+
+test("Steering notes durability: broadcast, section, subsection, timer expiration, and toggle on/off", async () => {
+  let lastUserPayload: any = null;
+  const mockFetch: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/chat")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      lastUserPayload = JSON.parse(body.messages?.[1]?.content ?? "{}");
+      return new Response(
+        JSON.stringify({
+          message: {
+            content: JSON.stringify({
+              thought: "Hold shot",
+              recommendedAction: "hold",
+              transition: "cut",
+              rationale: "Holding current shot",
+            }),
+          },
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200 });
+  };
+
+  const config = loadConfig({ PIDIRECTOR_MODE: "autonomous" });
+  const { app, world } = buildApp(config, { fetchFn: mockFetch, autoEvaluateOnCue: false });
+  await app.ready();
+
+  // Set initial rundown position: section "sec3_intercession", subsection "sub3_dead"
+  world.updateRundownContext({
+    title: "Sunday High Mass",
+    currentSection: "sec3_intercession",
+    currentCueId: "sub3_dead",
+    currentCueTitle: "prayer for dead",
+  });
+
+  // 1. Add broadcast, section, subsection, and 1s timer notes
+  const bRes = await app.inject({
+    method: "POST",
+    url: "/api/v1/steer/notes",
+    payload: { text: "Keep warm lighting framing all service", scope: "broadcast" },
+  });
+  const broadcastId = bRes.json().note.id;
+
+  const secRes = await app.inject({
+    method: "POST",
+    url: "/api/v1/steer/notes",
+    payload: { text: "Cantor leads intercession from left lectern", scope: "section" },
+  });
+  const sectionId = secRes.json().note.id;
+
+  const subRes = await app.inject({
+    method: "POST",
+    url: "/api/v1/steer/notes",
+    payload: { text: "Hold wide shot while candles are lit", scope: "subsection" },
+  });
+  const subsectionId = subRes.json().note.id;
+
+  await app.inject({
+    method: "POST",
+    url: "/api/v1/steer/notes",
+    payload: { text: "Avoid Cam 2 for 1 second while tripod adjusts", scope: "timer", duration: 1 },
+  });
+
+  // All 4 notes are initially active in prompt
+  await app.inject({
+    method: "POST",
+    url: "/api/v1/evaluate",
+    payload: { trigger: "check_1" },
+  });
+  assert.equal(lastUserPayload.humanSteering.activeNotes.length, 4);
+
+  // 2. Toggle off broadcast note -> only 3 active notes in prompt
+  await app.inject({
+    method: "POST",
+    url: `/api/v1/steer/notes/${broadcastId}/toggle`,
+    payload: { enabled: false },
+  });
+  await app.inject({
+    method: "POST",
+    url: "/api/v1/evaluate",
+    payload: { trigger: "check_2" },
+  });
+  assert.equal(lastUserPayload.humanSteering.activeNotes.length, 3);
+  assert.ok(!lastUserPayload.humanSteering.activeNotes.some((n: any) => n.id === broadcastId));
+
+  // 3. Advance rundown to next subsection ("sub4_lords_prayer") in the SAME section ("sec3_intercession")
+  // -> subsection note automatically expires!
+  world.updateRundownContext({
+    currentSection: "sec3_intercession",
+    currentCueId: "sub4_lords_prayer",
+    currentCueTitle: "Lord's Prayer",
+  });
+  const afterSubChange = world.getSteering();
+  const subNote = afterSubChange.notes.find((n) => n.id === subsectionId);
+  assert.equal(subNote?.expired, true);
+  assert.equal(subNote?.expiredReason, "subsection_changed");
+  assert.equal(afterSubChange.notes.find((n) => n.id === sectionId)?.expired, false);
+
+  // 4. Advance rundown to a NEW section ("sec4_communion")
+  // -> section note automatically expires!
+  world.updateRundownContext({
+    currentSection: "sec4_communion",
+    currentCueId: "communion_prep",
+    currentCueTitle: "Communion Preparation",
+  });
+  const afterSecChange = world.getSteering();
+  const secNote = afterSecChange.notes.find((n) => n.id === sectionId);
+  assert.equal(secNote?.expired, true);
+  assert.equal(secNote?.expiredReason, "section_changed");
+
+  // 5. Wait for 1s timer note to expire -> 0 active notes left!
+  const futureMs = Date.now() + 1500;
+  const afterTimer = world.getSteering(futureMs);
+  assert.equal(afterTimer.activeNotes.length, 0);
+  assert.equal(afterTimer.instruction, null);
+
+  // 6. Toggle broadcast note back ON -> 1 active note in prompt again
+  await app.inject({
+    method: "POST",
+    url: `/api/v1/steer/notes/${broadcastId}/toggle`,
+    payload: { enabled: true },
+  });
+  assert.equal(world.getSteering().activeNotes.length, 1);
+  assert.equal(world.getSteering().activeNotes[0]?.id, broadcastId);
+
+  await app.close();
+});

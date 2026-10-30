@@ -206,6 +206,14 @@
                 "type": "object",
                 "properties": {
                   "instruction": { "type": ["string", "null"] },
+                  "scope": {
+                    "type": "string",
+                    "enum": ["broadcast", "section", "subsection", "timer"]
+                  },
+                  "duration": {
+                    "type": ["number", "string"],
+                    "description": "Duration in seconds (number) or M:SS / H:MM:SS string for time-based notes"
+                  },
                   "pacing": {
                     "type": ["string", "null"],
                     "enum": ["meditative", "calm", "liturgical", "dynamic", "brisk", null]
@@ -229,6 +237,90 @@
           "200": {
             "description": "Steering updated"
           }
+        }
+      }
+    },
+    "/api/v1/steer/notes": {
+      "post": {
+        "operationId": "addSteeringNote",
+        "summary": "Add a scoped human steering note (broadcast, section, subsection, or timer)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                  "text": { "type": "string" },
+                  "scope": {
+                    "type": "string",
+                    "enum": ["broadcast", "section", "subsection", "timer"],
+                    "default": "broadcast"
+                  },
+                  "duration": {
+                    "type": ["number", "string"],
+                    "description": "Duration in seconds (number) or M:SS / H:MM:SS string"
+                  },
+                  "enabled": { "type": "boolean", "default": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Steering note added"
+          }
+        }
+      }
+    },
+    "/api/v1/steer/notes/{id}/toggle": {
+      "post": {
+        "operationId": "toggleSteeringNote",
+        "summary": "Toggle a steering note on or off (or re-enable an expired note)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Steering note toggled" },
+          "404": { "description": "Note not found" }
+        }
+      }
+    },
+    "/api/v1/steer/notes/{id}": {
+      "delete": {
+        "operationId": "removeSteeringNote",
+        "summary": "Remove a steering note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Steering note removed" },
+          "404": { "description": "Note not found" }
         }
       }
     },

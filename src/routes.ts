@@ -8,7 +8,11 @@ import type { OllamaDirectorClient } from "./ollama/client.js";
 import type { CameraMotionTracker } from "./state/camera-motion-tracker.js";
 import { formatLogsForCli, type DecisionLogger } from "./state/decision-logger.js";
 import type { WorldTracker } from "./state/world-tracker.js";
-import { DirectorModeSchema, HumanSteeringPatchSchema } from "./types.js";
+import {
+  DirectorModeSchema,
+  HumanSteeringPatchSchema,
+  SteeringNoteCreateSchema,
+} from "./types.js";
 
 const openApiSpec = JSON.parse(
   readFileSync(new URL("../openapi/openapi.json", import.meta.url), "utf8")
@@ -204,6 +208,60 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
       ok: true,
       steering,
       effectiveConstraints: world.getEffectiveConstraints(),
+      logEntry,
+    };
+  });
+
+  app.post("/api/v1/steer/notes", async (request, reply) => {
+    const parsed = SteeringNoteCreateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "Invalid steering note payload",
+        details: parsed.error.format(),
+      });
+    }
+
+    const note = world.addSteeringNote(parsed.data);
+    const steering = world.getSteering();
+    const logEntry = decisionLogger.logSteering(steering, engine.getMode());
+    return {
+      ok: true,
+      note,
+      steering,
+      logEntry,
+    };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/v1/steer/notes/:id/toggle", async (request, reply) => {
+    const body = (request.body ?? {}) as { enabled?: boolean };
+    const note = world.toggleSteeringNote(request.params.id, body.enabled);
+    if (!note) {
+      return reply.code(404).send({
+        error: `Steering note '${request.params.id}' not found`,
+      });
+    }
+    const steering = world.getSteering();
+    const logEntry = decisionLogger.logSteering(steering, engine.getMode());
+    return {
+      ok: true,
+      note,
+      steering,
+      logEntry,
+    };
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/v1/steer/notes/:id", async (request, reply) => {
+    const removed = world.removeSteeringNote(request.params.id);
+    if (!removed) {
+      return reply.code(404).send({
+        error: `Steering note '${request.params.id}' not found`,
+      });
+    }
+    const steering = world.getSteering();
+    const logEntry = decisionLogger.logSteering(steering, engine.getMode());
+    return {
+      ok: true,
+      steering,
       logEntry,
     };
   });
