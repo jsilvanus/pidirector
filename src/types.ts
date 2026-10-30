@@ -188,20 +188,64 @@ export type DirectorLogCategory =
   | "mode"
   | "steer";
 
+export interface DirectorLogRundownContext {
+  placeInEvent?: string | null | undefined;
+  cueId?: string | null | undefined;
+  cueTitle?: string | null | undefined;
+  section?: string | null | undefined;
+  timingSummary?: string | null | undefined;
+  nextItemTitle?: string | null | undefined;
+  nextItemCueSummary?: string | null | undefined;
+}
+
+export interface DirectorLogActionSummary {
+  recommendedAction: "cut" | "hold" | "prepare_only";
+  cutToInput?: number | undefined;
+  prepareCamera?: {
+    camera: number | string;
+    preset: number | string;
+  } | undefined;
+  transition?: "cut" | "auto" | undefined;
+  graphics?: {
+    showLowerThird: boolean;
+    title?: string | undefined;
+    subtitle?: string | undefined;
+  } | undefined;
+}
+
+export interface DirectorLogGuardrailSummary {
+  allowed: boolean;
+  modified: boolean;
+  suppressedReason?: string | undefined;
+  appliedRule?: string | undefined;
+}
+
 export interface DirectorLogEntry {
   id: string;
   timestamp: string;
-  timeShort: string;
   level: "info" | "action" | "advisory" | "guardrail" | "override";
   category: DirectorLogCategory;
+  mode: DirectorMode;
+  previousMode?: DirectorMode | undefined;
+  source: "ollama" | "deterministic-fallback" | "human-advisory-accept" | "operator";
+  trigger?: string | undefined;
+  actor?: string | undefined;
   headline: string;
   detail: string;
-  formattedLine: string;
-  trigger?: string | undefined;
-  cueTitle?: string | null | undefined;
-  mode: DirectorMode;
-  source?: "ollama" | "deterministic-fallback" | "human-advisory-accept" | "operator" | undefined;
-  targetInput?: number | undefined;
-  preset?: string | number | undefined;
+  thought?: string | undefined;
+  rationale?: string | undefined;
+  executed?: boolean | undefined;
+  advisoryId?: string | undefined;
+  latencyMs?: number | undefined;
+  action?: DirectorLogActionSummary | undefined;
+  guardrail?: DirectorLogGuardrailSummary | undefined;
+  rundown?: DirectorLogRundownContext | undefined;
+  steering?: {
+    instruction?: string | null | undefined;
+    lockCamera?: number | null | undefined;
+    excludeCameras?: number[] | undefined;
+    pacing?: string | null | undefined;
+    minShotDwellSec?: number | null | undefined;
+  } | undefined;
 }
 

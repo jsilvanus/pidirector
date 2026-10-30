@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { formatLogsForCli } from "../src/state/decision-logger.js";
 
 test("CameraMotionTracker tracks FreeD motion:moving, motion:stopped, preset:settled and raw FreeD packets", async () => {
   const config = loadConfig({ PIDIRECTOR_MODE: "advisory" });
@@ -531,7 +532,7 @@ test("Rolling context (recentDecisions & transcripts) is passed to Ollama and hu
   assert.match(capturedPrompts[1].recentDecisions[0].summary, /CUT → Cam 2/);
   assert.equal(capturedPrompts[1].recentTranscripts.length, 2);
 
-  // Verify human-readable logs via JSON API
+  // Verify structured JSON logs via API
   const logsRes = await app.inject({
     method: "GET",
     url: "/api/v1/logs",
@@ -540,23 +541,25 @@ test("Rolling context (recentDecisions & transcripts) is passed to Ollama and hu
   const logsJson = logsRes.json();
   assert.equal(logsJson.logs.length, 2);
   assert.equal(logsJson.logs[0].category, "cut");
+  assert.equal(logsJson.logs[0].action.cutToInput, 2);
+  assert.equal(logsJson.logs[0].guardrail.allowed, true);
   assert.match(logsJson.logs[0].headline, /CUT → Cam 2/);
-  assert.match(logsJson.text, /\[CUT\] CUT → Cam 2/);
-  assert.match(logsJson.text, /\[CUT\] CUT → Cam 3/);
 
-  // Verify plain-text log endpoint (?format=text)
-  const textRes = await app.inject({
-    method: "GET",
-    url: "/api/v1/logs?format=text",
-  });
-  assert.equal(textRes.statusCode, 200);
-  assert.match(textRes.body, /Shot 1 focus on Cam 2/);
-  assert.match(textRes.body, /Shot 2 focus on Cam 3/);
+  // Verify CLI human-readable formatter renders structured JSON logs
+  const cliRendered = formatLogsForCli(logsJson.logs);
+  assert.match(cliRendered, /\[CUT\] CUT → Cam 2/);
+  assert.match(cliRendered, /\[CUT\] CUT → Cam 3/);
 
-  // Verify log file was persisted on disk
+  // Verify log file was persisted on disk as structured JSON Lines (.jsonl)
   const diskContent = await fs.readFile(logFile, "utf8");
-  assert.match(diskContent, /\[CUT\] CUT → Cam 2/);
-  assert.match(diskContent, /\[CUT\] CUT → Cam 3/);
+  const jsonLines = diskContent
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => JSON.parse(line));
+  assert.equal(jsonLines.length, 2);
+  assert.equal(jsonLines[0].category, "cut");
+  assert.equal(jsonLines[0].action.cutToInput, 2);
+  assert.equal(jsonLines[1].action.cutToInput, 3);
 
   await app.close();
 });
@@ -695,12 +698,23 @@ test("Rundown situational awareness: placeInEvent, hierarchical timing, nextItem
   assert.equal(lastUserPayload.nextItem.expectedDurationSec, 5);
   assert.equal(lastUserPayload.nextItem.timerSec, 10);
 
-  // Verify human-readable log includes placeInEvent
+  // Verify structured JSON log includes rundown context and CLI formatter renders it human-readably
   const logsRes = await app.inject({
     method: "GET",
-    url: "/api/v1/logs?format=text",
+    url: "/api/v1/logs",
   });
-  assert.match(logsRes.body, /Cue: 4\/18 prayer for dead/);
+  const logsData = logsRes.json();
+  assert.equal(logsData.logs[0].rundown.placeInEvent, "4/18 prayer for dead");
+  assert.equal(
+    logsData.logs[0].rundown.timingSummary,
+    "Whole service 26:03/1:15:00, currently section 3/15 intercession 5:00/15:00, subsection 3/5 prayer for dead 2:00/3:03"
+  );
+  assert.equal(logsData.logs[0].rundown.nextItemTitle, "Lord's Prayer");
+  assert.equal(logsData.logs[0].rundown.nextItemCueSummary, 'Exact: "Our Father in heaven"');
+
+  const cliText = formatLogsForCli(logsData.logs);
+  assert.match(cliText, /Cue: 4\/18 prayer for dead/);
+  assert.match(cliText, /Next: Lord's Prayer \[Exact: "Our Father in heaven"\]/);
 
   await app.close();
 });

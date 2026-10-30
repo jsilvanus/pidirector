@@ -6,7 +6,7 @@ import type { DirectorEventBroker } from "./events.js";
 import type { EventIngestor } from "./ingest/sse-client.js";
 import type { OllamaDirectorClient } from "./ollama/client.js";
 import type { CameraMotionTracker } from "./state/camera-motion-tracker.js";
-import type { DecisionLogger } from "./state/decision-logger.js";
+import { formatLogsForCli, type DecisionLogger } from "./state/decision-logger.js";
 import type { WorldTracker } from "./state/world-tracker.js";
 import { DirectorModeSchema, HumanSteeringPatchSchema } from "./types.js";
 
@@ -288,15 +288,13 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
     const limit = query.limit ? Number.parseInt(query.limit, 10) : 50;
     const safeLimit = Number.isNaN(limit) ? 50 : limit;
     const logs = decisionLogger.getEntries(safeLimit);
-    const text = decisionLogger.getFormattedText(safeLimit);
 
     if (query.format === "text") {
-      return reply.type("text/plain; charset=utf-8").send(text);
+      return reply.type("text/plain; charset=utf-8").send(formatLogsForCli(logs));
     }
 
     return {
       logs,
-      text,
     };
   });
 

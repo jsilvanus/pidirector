@@ -1,12 +1,12 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { DirectorEventBroker } from "../events.js";
 import type {
   AdvisoryShot,
-  DecisionHistoryEntry,
   DirectorDecision,
   DirectorLogCategory,
   DirectorLogEntry,
+  DirectorLogRundownContext,
   DirectorMode,
   GuardrailVerdict,
   HumanSteeringState,
@@ -46,6 +46,27 @@ export function formatDecisionTarget(decision: DirectorDecision): string {
   return parts.length > 0 ? parts.join(" + ") : "current shot";
 }
 
+/**
+ * Formats a structured JSON DirectorLogEntry into a human-readable line for the CLI (`pidirector logs`)
+ * and rolling LLM context summaries.
+ */
+export function formatLogEntryForCli(entry: DirectorLogEntry): string {
+  const timeShort = formatTimeShort(entry.timestamp);
+  const cueLabel = entry.rundown?.placeInEvent ?? entry.rundown?.cueTitle;
+  const cuePart = cueLabel ? ` | Cue: ${cueLabel}` : "";
+  const timingPart = entry.rundown?.timingSummary ? ` (${entry.rundown.timingSummary})` : "";
+  const nextPart = entry.rundown?.nextItemTitle
+    ? ` | Next: ${entry.rundown.nextItemTitle}${
+        entry.rundown.nextItemCueSummary ? ` [${entry.rundown.nextItemCueSummary}]` : ""
+      }`
+    : "";
+  return `[${timeShort}] [${entry.category.toUpperCase()}] ${entry.headline}${cuePart}${timingPart}${nextPart} — ${entry.detail}`;
+}
+
+export function formatLogsForCli(entries: DirectorLogEntry[]): string {
+  return entries.map(formatLogEntryForCli).join("\n");
+}
+
 export class DecisionLogger {
   private readonly entries: DirectorLogEntry[] = [];
   private readonly eventBroker?: DirectorEventBroker | undefined;
@@ -58,32 +79,26 @@ export class DecisionLogger {
     this.eventBroker = options.eventBroker;
     this.logFilePath = options.logFilePath;
     this.maxEntries = options.maxEntries ?? 200;
+    this.loadFromDisk();
   }
 
   getEntries(limit = 50): DirectorLogEntry[] {
-    return this.entries.slice(-limit);
-  }
-
-  getFormattedText(limit = 50): string {
-    return this.getEntries(limit)
-      .map((e) => e.formattedLine)
-      .join("\n");
+    return this.entries.slice(-limit).map((e) => structuredClone(e));
   }
 
   logDecisionOutcome(params: {
     timestamp: string;
     trigger: string;
-    cueTitle?: string | null | undefined;
+    rundown?: DirectorLogRundownContext | undefined;
     mode: DirectorMode;
     source: "ollama" | "deterministic-fallback" | "human-advisory-accept";
     decision: DirectorDecision;
     verdict: GuardrailVerdict;
     executed: boolean;
     advisory?: AdvisoryShot | undefined;
+    latencyMs?: number | undefined;
   }): DirectorLogEntry {
-    const timeShort = formatTimeShort(params.timestamp);
     const targetDesc = formatDecisionTarget(params.decision);
-    const cuePart = params.cueTitle ? ` | Cue: ${params.cueTitle}` : "";
     const reasonText =
       params.decision.rationale || params.decision.thought || `Triggered by ${params.trigger}`;
 
@@ -132,23 +147,46 @@ export class DecisionLogger {
       detail = reasonText;
     }
 
-    const formattedLine = `[${timeShort}] [${category.toUpperCase()}] ${headline}${cuePart} — ${detail}`;
-
     return this.append({
       id: `log_${this.seq++}`,
       timestamp: params.timestamp,
-      timeShort,
       level,
       category,
-      headline,
-      detail,
-      formattedLine,
-      trigger: params.trigger,
-      cueTitle: params.cueTitle ?? null,
       mode: params.mode,
       source: params.source,
-      targetInput: params.decision.cutToInput,
-      preset: params.decision.prepareCamera?.preset,
+      trigger: params.trigger,
+      headline,
+      detail,
+      thought: params.decision.thought || undefined,
+      rationale: params.decision.rationale || undefined,
+      executed: params.executed,
+      advisoryId: params.advisory?.id,
+      latencyMs: params.latencyMs,
+      action: {
+        recommendedAction: params.decision.recommendedAction,
+        cutToInput: params.decision.cutToInput,
+        prepareCamera: params.decision.prepareCamera
+          ? {
+              camera: params.decision.prepareCamera.camera,
+              preset: params.decision.prepareCamera.preset,
+            }
+          : undefined,
+        transition: params.decision.transition,
+        graphics: params.decision.graphics
+          ? {
+              showLowerThird: params.decision.graphics.showLowerThird,
+              title: params.decision.graphics.title,
+              subtitle: params.decision.graphics.subtitle,
+            }
+          : undefined,
+      },
+      guardrail: {
+        allowed: params.verdict.allowed,
+        modified: params.verdict.modified,
+        suppressedReason: params.verdict.suppressedReason,
+        appliedRule: params.verdict.appliedRule,
+      },
+      rundown: params.rundown,
     });
   }
 
@@ -158,22 +196,19 @@ export class DecisionLogger {
     reason?: string
   ): DirectorLogEntry {
     const timestamp = new Date().toISOString();
-    const timeShort = formatTimeShort(timestamp);
     const headline = `Mode changed: ${previousMode.toUpperCase()} → ${mode.toUpperCase()}`;
     const detail = reason ?? "Operator mode change";
-    const formattedLine = `[${timeShort}] [MODE] ${headline} — ${detail}`;
 
     return this.append({
       id: `log_${this.seq++}`,
       timestamp,
-      timeShort,
       level: "info",
       category: "mode",
+      mode,
+      previousMode,
+      source: "operator",
       headline,
       detail,
-      formattedLine,
-      mode,
-      source: "operator",
     });
   }
 
@@ -184,28 +219,25 @@ export class DecisionLogger {
     newMode: DirectorMode
   ): DirectorLogEntry {
     const timestamp = new Date().toISOString();
-    const timeShort = formatTimeShort(timestamp);
     const headline = `Preempted by ${actor} (${previousMode.toUpperCase()} → ${newMode.toUpperCase()})`;
     const detail = reason;
-    const formattedLine = `[${timeShort}] [PREEMPT] ${headline} — ${detail}`;
 
     return this.append({
       id: `log_${this.seq++}`,
       timestamp,
-      timeShort,
       level: "override",
       category: "preempt",
+      mode: newMode,
+      previousMode,
+      source: "operator",
+      actor,
       headline,
       detail,
-      formattedLine,
-      mode: newMode,
-      source: "operator",
     });
   }
 
   logSteering(steering: HumanSteeringState, mode: DirectorMode): DirectorLogEntry {
     const timestamp = steering.updatedAt ?? new Date().toISOString();
-    const timeShort = formatTimeShort(timestamp);
     const parts: string[] = [];
     if (steering.instruction) parts.push(`Note: "${steering.instruction}"`);
     if (steering.lockCamera !== null) parts.push(`Locked Cam ${steering.lockCamera}`);
@@ -217,20 +249,51 @@ export class DecisionLogger {
 
     const detail = parts.length > 0 ? parts.join(" | ") : "Cleared human steering overrides";
     const headline = `Operator updated steering directives`;
-    const formattedLine = `[${timeShort}] [STEER] ${headline} — ${detail}`;
 
     return this.append({
       id: `log_${this.seq++}`,
       timestamp,
-      timeShort,
       level: "override",
       category: "steer",
-      headline,
-      detail,
-      formattedLine,
       mode,
       source: "operator",
+      headline,
+      detail,
+      steering: {
+        instruction: steering.instruction,
+        lockCamera: steering.lockCamera,
+        excludeCameras: [...steering.excludeCameras],
+        pacing: steering.pacing,
+        minShotDwellSec: steering.minShotDwellSec,
+      },
     });
+  }
+
+  private loadFromDisk(): void {
+    if (!this.logFilePath || !existsSync(this.logFilePath)) return;
+    try {
+      const content = readFileSync(this.logFilePath, "utf8");
+      const lines = content
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      for (const line of lines.slice(-this.maxEntries)) {
+        try {
+          const parsed = JSON.parse(line) as DirectorLogEntry;
+          if (parsed && typeof parsed.id === "string" && typeof parsed.timestamp === "string") {
+            this.entries.push(parsed);
+            const num = Number.parseInt(parsed.id.replace(/^log_/, ""), 10);
+            if (!Number.isNaN(num) && num >= this.seq) {
+              this.seq = num + 1;
+            }
+          }
+        } catch {
+          // Ignore malformed lines
+        }
+      }
+    } catch {
+      // Non-fatal if disk read fails
+    }
   }
 
   private append(entry: DirectorLogEntry): DirectorLogEntry {
@@ -245,13 +308,17 @@ export class DecisionLogger {
           mkdirSync(path.dirname(this.logFilePath), { recursive: true });
           this.dirCreated = true;
         }
-        appendFileSync(this.logFilePath, `${entry.formattedLine}\n`, "utf8");
+        appendFileSync(this.logFilePath, `${JSON.stringify(entry)}\n`, "utf8");
       } catch {
         // Non-fatal if disk write fails in restricted environment
       }
     }
 
-    this.eventBroker?.emit({ type: "log", data: entry });
+    this.eventBroker?.emit({
+      type: "log",
+      data: entry,
+    });
+
     return entry;
   }
 }

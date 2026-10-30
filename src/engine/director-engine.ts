@@ -2,7 +2,7 @@ import type { DirectorEventBroker } from "../events.js";
 import type { McpExecutor } from "../mcp/mcp-executor.js";
 import type { OllamaDirectorClient } from "../ollama/client.js";
 import type { CameraMotionTracker } from "../state/camera-motion-tracker.js";
-import type { DecisionLogger } from "../state/decision-logger.js";
+import { formatLogEntryForCli, type DecisionLogger } from "../state/decision-logger.js";
 import type { WorldTracker } from "../state/world-tracker.js";
 import type {
   AdvisoryShot,
@@ -446,7 +446,15 @@ export class DirectorEngine {
 
       const timestamp = new Date().toISOString();
       const rundownSnap = this.world.getRundown();
-      const cueTitle = rundownSnap.placeInEvent ?? rundownSnap.currentCueTitle;
+      const rundownLogCtx = {
+        placeInEvent: rundownSnap.placeInEvent,
+        cueId: rundownSnap.currentCueId,
+        cueTitle: rundownSnap.currentCueTitle,
+        section: rundownSnap.currentSection,
+        timingSummary: rundownSnap.progress?.summary ?? null,
+        nextItemTitle: rundownSnap.nextItem?.title ?? null,
+        nextItemCueSummary: rundownSnap.nextItem?.cueSummary ?? null,
+      };
 
       this.eventBroker.emit({
         type: "decision",
@@ -472,15 +480,17 @@ export class DirectorEngine {
           },
         });
 
+        const latencyMs = Date.now() - startMs;
         const logEntry = this.decisionLogger.logDecisionOutcome({
           timestamp,
           trigger,
-          cueTitle,
+          rundown: rundownLogCtx,
           mode: this.mode,
           source,
           decision: verdict.decision,
           verdict,
           executed: false,
+          latencyMs,
         });
 
         const historyEntry: DecisionHistoryEntry = {
@@ -492,9 +502,9 @@ export class DirectorEngine {
           decision: verdict.decision,
           guardrailVerdict: verdict,
           executed: false,
-          humanSummary: logEntry.formattedLine,
+          humanSummary: formatLogEntryForCli(logEntry),
           mcpCalls: [],
-          latencyMs: Date.now() - startMs,
+          latencyMs,
         };
         this.recordHistory(historyEntry);
 
@@ -511,15 +521,17 @@ export class DirectorEngine {
 
       // If decision is "hold", no action or advisory needed
       if (verdict.decision.recommendedAction === "hold") {
+        const latencyMs = Date.now() - startMs;
         const logEntry = this.decisionLogger.logDecisionOutcome({
           timestamp,
           trigger,
-          cueTitle,
+          rundown: rundownLogCtx,
           mode: this.mode,
           source,
           decision: verdict.decision,
           verdict,
           executed: false,
+          latencyMs,
         });
 
         const historyEntry: DecisionHistoryEntry = {
@@ -531,9 +543,9 @@ export class DirectorEngine {
           decision: verdict.decision,
           guardrailVerdict: verdict,
           executed: false,
-          humanSummary: logEntry.formattedLine,
+          humanSummary: formatLogEntryForCli(logEntry),
           mcpCalls: [],
-          latencyMs: Date.now() - startMs,
+          latencyMs,
         };
         this.recordHistory(historyEntry);
 
@@ -564,16 +576,18 @@ export class DirectorEngine {
         this.pendingAdvisory = advisory;
         this.eventBroker.emit({ type: "advisory", data: advisory });
 
+        const latencyMs = Date.now() - startMs;
         const logEntry = this.decisionLogger.logDecisionOutcome({
           timestamp,
           trigger,
-          cueTitle,
+          rundown: rundownLogCtx,
           mode: this.mode,
           source,
           decision: verdict.decision,
           verdict,
           executed: false,
           advisory,
+          latencyMs,
         });
 
         const historyEntry: DecisionHistoryEntry = {
@@ -585,9 +599,9 @@ export class DirectorEngine {
           decision: verdict.decision,
           guardrailVerdict: verdict,
           executed: false,
-          humanSummary: logEntry.formattedLine,
+          humanSummary: formatLogEntryForCli(logEntry),
           mcpCalls: [],
-          latencyMs: Date.now() - startMs,
+          latencyMs,
         };
         this.recordHistory(historyEntry);
 
@@ -605,15 +619,17 @@ export class DirectorEngine {
 
       // Manual Mode (without forceWhenManual) -> Do not execute
       if (this.mode === "manual") {
+        const latencyMs = Date.now() - startMs;
         const logEntry = this.decisionLogger.logDecisionOutcome({
           timestamp,
           trigger,
-          cueTitle,
+          rundown: rundownLogCtx,
           mode: this.mode,
           source,
           decision: verdict.decision,
           verdict,
           executed: false,
+          latencyMs,
         });
 
         const historyEntry: DecisionHistoryEntry = {
@@ -625,9 +641,9 @@ export class DirectorEngine {
           decision: verdict.decision,
           guardrailVerdict: verdict,
           executed: false,
-          humanSummary: logEntry.formattedLine,
+          humanSummary: formatLogEntryForCli(logEntry),
           mcpCalls: [],
-          latencyMs: Date.now() - startMs,
+          latencyMs,
         };
         this.recordHistory(historyEntry);
 
@@ -664,15 +680,17 @@ export class DirectorEngine {
         });
       }
 
+      const latencyMs = Date.now() - startMs;
       const logEntry = this.decisionLogger.logDecisionOutcome({
         timestamp: new Date().toISOString(),
         trigger,
-        cueTitle,
+        rundown: rundownLogCtx,
         mode: this.mode,
         source,
         decision: verdict.decision,
         verdict,
         executed: execRes.executed,
+        latencyMs,
       });
 
       const historyEntry: DecisionHistoryEntry = {
@@ -684,9 +702,9 @@ export class DirectorEngine {
         decision: verdict.decision,
         guardrailVerdict: verdict,
         executed: execRes.executed,
-        humanSummary: logEntry.formattedLine,
+        humanSummary: formatLogEntryForCli(logEntry),
         mcpCalls: execRes.mcpCalls,
-        latencyMs: Date.now() - startMs,
+        latencyMs,
       };
       this.recordHistory(historyEntry);
 
@@ -764,15 +782,26 @@ export class DirectorEngine {
     this.pendingAdvisory = null;
 
     const timestamp = new Date().toISOString();
+    const rundownSnap = this.world.getRundown();
+    const latencyMs = Date.now() - startMs;
     const logEntry = this.decisionLogger.logDecisionOutcome({
       timestamp,
       trigger: `advisory_accept:${advisory.id}`,
-      cueTitle: this.world.getRundown().currentCueTitle,
+      rundown: {
+        placeInEvent: rundownSnap.placeInEvent,
+        cueId: rundownSnap.currentCueId,
+        cueTitle: rundownSnap.currentCueTitle,
+        section: rundownSnap.currentSection,
+        timingSummary: rundownSnap.progress?.summary ?? null,
+        nextItemTitle: rundownSnap.nextItem?.title ?? null,
+        nextItemCueSummary: rundownSnap.nextItem?.cueSummary ?? null,
+      },
       mode: this.mode,
       source: "human-advisory-accept",
       decision: verdict.decision,
       verdict,
       executed: true,
+      latencyMs,
     });
 
     const historyEntry: DecisionHistoryEntry = {
@@ -784,9 +813,9 @@ export class DirectorEngine {
       decision: verdict.decision,
       guardrailVerdict: verdict,
       executed: true,
-      humanSummary: logEntry.formattedLine,
+      humanSummary: formatLogEntryForCli(logEntry),
       mcpCalls: execRes.mcpCalls,
-      latencyMs: Date.now() - startMs,
+      latencyMs,
     };
     this.recordHistory(historyEntry);
     this.eventBroker.emit({ type: "executed", data: historyEntry });

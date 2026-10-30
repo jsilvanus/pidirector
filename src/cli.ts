@@ -1,3 +1,5 @@
+import { formatLogsForCli } from "./state/decision-logger.js";
+
 const baseUrl = (process.env["PIDIRECTOR_URL"] ?? "http://127.0.0.1:3450").replace(/\/+$/, "");
 
 async function request(path: string, method = "GET", body?: unknown): Promise<any> {
@@ -162,7 +164,8 @@ async function run(): Promise<void> {
       if (args.includes("--json")) {
         console.log(JSON.stringify(data, null, 2));
       } else {
-        console.log(data.text || "(No log entries yet)");
+        const rendered = formatLogsForCli(Array.isArray(data.logs) ? data.logs : []);
+        console.log(rendered || "(No log entries yet)");
       }
       break;
     }
