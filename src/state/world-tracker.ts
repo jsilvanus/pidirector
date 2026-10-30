@@ -32,12 +32,83 @@ export interface SpatialSnapshot {
   updatedAt: string | null;
 }
 
+export interface RundownLevelTiming {
+  index?: number | undefined;
+  total?: number | undefined;
+  place?: string | undefined;
+  id?: string | undefined;
+  title?: string | undefined;
+  elapsedSec: number;
+  expectedDurationSec: number | null;
+  timerSec?: number | null | undefined;
+  timing: string;
+  overtime?: boolean | undefined;
+}
+
+export interface RundownProgressInfo {
+  placeInEvent: string;
+  service: {
+    elapsedSec: number;
+    expectedDurationSec: number | null;
+    timing: string;
+    overtime?: boolean | undefined;
+  };
+  section: {
+    index: number;
+    total: number;
+    place: string;
+    id: string;
+    title: string;
+    elapsedSec: number;
+    expectedDurationSec: number | null;
+    timerSec?: number | null | undefined;
+    timing: string;
+    overtime?: boolean | undefined;
+  } | null;
+  subsection: {
+    index: number;
+    total: number;
+    place: string;
+    id: string;
+    title: string;
+    elapsedSec: number;
+    expectedDurationSec: number | null;
+    timerSec?: number | null | undefined;
+    timing: string;
+    overtime?: boolean | undefined;
+  } | null;
+  summary: string;
+}
+
+export interface RundownNextItemInfo {
+  id: string;
+  line?: number | undefined;
+  index?: number | undefined;
+  title: string;
+  section?: string | null | undefined;
+  cueSummary?: string | null | undefined;
+  cue?: unknown | undefined;
+  expectedDurationSec?: number | null | undefined;
+  timerSec?: number | null | undefined;
+  ai?: AiItemInstructions | string | null | undefined;
+}
+
 export interface RundownContextSnapshot {
   title: string | null;
+  service: string | null;
+  church: string | null;
+  date: string | null;
+  currentIndex: number;
+  totalItems: number;
+  placeInEvent: string | null;
   currentCueId: string | null;
   currentCueTitle: string | null;
   currentSection: string | null;
   assignedSpeaker: string | null;
+  expectedDurationSec: number | null;
+  timerSec: number | null;
+  progress: RundownProgressInfo | null;
+  nextItem: RundownNextItemInfo | null;
   generalAi: AiGeneralInstructions;
   currentItemAi: AiItemInstructions | null;
   defaultActions: Array<Record<string, unknown> | string>;
@@ -72,10 +143,20 @@ export class WorldTracker {
 
   private rundown: RundownContextSnapshot = {
     title: null,
+    service: null,
+    church: null,
+    date: null,
+    currentIndex: -1,
+    totalItems: 0,
+    placeInEvent: null,
     currentCueId: null,
     currentCueTitle: null,
     currentSection: null,
     assignedSpeaker: null,
+    expectedDurationSec: null,
+    timerSec: null,
+    progress: null,
+    nextItem: null,
     generalAi: {
       pacing: "liturgical",
       style: "Dignified, calm, contemplative Nordic Lutheran liturgy.",
@@ -268,6 +349,17 @@ export class WorldTracker {
   getRundown(): RundownContextSnapshot {
     return {
       ...this.rundown,
+      progress: this.rundown.progress
+        ? {
+            ...this.rundown.progress,
+            service: { ...this.rundown.progress.service },
+            section: this.rundown.progress.section ? { ...this.rundown.progress.section } : null,
+            subsection: this.rundown.progress.subsection
+              ? { ...this.rundown.progress.subsection }
+              : null,
+          }
+        : null,
+      nextItem: this.rundown.nextItem ? { ...this.rundown.nextItem } : null,
       generalAi: {
         ...this.rundown.generalAi,
         guidelines: [...this.rundown.generalAi.guidelines],
@@ -280,19 +372,54 @@ export class WorldTracker {
 
   updateRundownContext(data: {
     title?: string | null | undefined;
+    service?: string | null | undefined;
+    church?: string | null | undefined;
+    date?: string | null | undefined;
+    currentIndex?: number | undefined;
+    totalItems?: number | undefined;
+    placeInEvent?: string | null | undefined;
     currentCueId?: string | null | undefined;
     currentCueTitle?: string | null | undefined;
     currentSection?: string | null | undefined;
     assignedSpeaker?: string | null | undefined;
+    expectedDurationSec?: number | null | undefined;
+    timerSec?: number | null | undefined;
+    progress?: RundownProgressInfo | null | undefined;
+    nextItem?: RundownNextItemInfo | null | undefined;
     generalAi?: Partial<AiGeneralInstructions> | undefined;
     currentItemAi?: AiItemInstructions | null | undefined;
     defaultActions?: Array<Record<string, unknown> | string> | undefined;
   }): void {
     if (data.title !== undefined) this.rundown.title = data.title;
+    if (data.service !== undefined) this.rundown.service = data.service;
+    if (data.church !== undefined) this.rundown.church = data.church;
+    if (data.date !== undefined) this.rundown.date = data.date;
+    if (data.currentIndex !== undefined) this.rundown.currentIndex = data.currentIndex;
+    if (data.totalItems !== undefined) this.rundown.totalItems = data.totalItems;
     if (data.currentCueId !== undefined) this.rundown.currentCueId = data.currentCueId;
     if (data.currentCueTitle !== undefined) this.rundown.currentCueTitle = data.currentCueTitle;
     if (data.currentSection !== undefined) this.rundown.currentSection = data.currentSection;
     if (data.assignedSpeaker !== undefined) this.rundown.assignedSpeaker = data.assignedSpeaker;
+    if (data.expectedDurationSec !== undefined) {
+      this.rundown.expectedDurationSec = data.expectedDurationSec;
+    }
+    if (data.timerSec !== undefined) {
+      this.rundown.timerSec = data.timerSec;
+    }
+    if (data.progress !== undefined) {
+      this.rundown.progress = data.progress;
+    }
+    if (data.nextItem !== undefined) {
+      this.rundown.nextItem = data.nextItem;
+    }
+    if (data.placeInEvent !== undefined) {
+      this.rundown.placeInEvent = data.placeInEvent;
+    } else if (this.rundown.progress?.placeInEvent) {
+      this.rundown.placeInEvent = this.rundown.progress.placeInEvent;
+    } else if (this.rundown.currentIndex >= 0 && this.rundown.totalItems > 0) {
+      const label = this.rundown.currentCueTitle ? ` ${this.rundown.currentCueTitle}` : "";
+      this.rundown.placeInEvent = `${this.rundown.currentIndex + 1}/${this.rundown.totalItems}${label}`;
+    }
     if (data.generalAi) {
       this.rundown.generalAi = {
         ...this.rundown.generalAi,

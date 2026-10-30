@@ -445,7 +445,8 @@ export class DirectorEngine {
       });
 
       const timestamp = new Date().toISOString();
-      const cueTitle = this.world.getRundown().currentCueTitle;
+      const rundownSnap = this.world.getRundown();
+      const cueTitle = rundownSnap.placeInEvent ?? rundownSnap.currentCueTitle;
 
       this.eventBroker.emit({
         type: "decision",

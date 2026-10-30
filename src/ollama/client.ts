@@ -85,10 +85,22 @@ export class OllamaDirectorClient {
       };
     });
 
-    const system = `You are pidirector, the Local AI Broadcast Director for live worship services at ${rundown.title ?? "Riihimäen Keskuskirkko"}.
+    const eventLabel = [rundown.title, rundown.service, rundown.church]
+      .filter(Boolean)
+      .join(" — ") || "Riihimäen Keskuskirkko";
+
+    const progressLine =
+      rundown.progress?.summary ??
+      (rundown.placeInEvent ? `Place in event: ${rundown.placeInEvent}` : "No active rundown timing");
+
+    const nextItemLine = rundown.nextItem
+      ? `${rundown.nextItem.title}${rundown.nextItem.cueSummary ? ` (Cue: ${rundown.nextItem.cueSummary})` : ""}`
+      : "None";
+
+    const system = `You are pidirector, the Local AI Broadcast Director for live worship services at ${eventLabel}.
 Respond ONLY with a valid JSON object matching this exact schema:
 {
-  "thought": "Brief analysis of live state, camera motion, rolling shot history, and rundown rules",
+  "thought": "Brief analysis of live state, camera motion, rolling shot history, rundown progress/timing, and upcoming item",
   "recommendedAction": "cut" | "hold" | "prepare_only",
   "prepareCamera": { "camera": 2, "preset": 1 }, // optional
   "cutToInput": 2, // optional ATEM input number (1, 2, 3)
@@ -102,11 +114,26 @@ Hard Broadcast Rules:
 2. NEVER cut directly to a camera whose isMoving=true unless you set prepareCamera to recall a preset (the execution engine will wait for FreeD preset:settled before cutting).
 3. Respect minimum shot dwell (${constraints.minShotDwellSec}s). Current dwell is ${switcher.dwellSec}s.
 4. Review recentDecisions to maintain visual continuity and avoid repetitive A-B-A-B ping-pong cuts.
-5. Style: ${rundown.generalAi.style ?? "Dignified, calm Nordic Lutheran liturgy"} | Pacing: ${pacing}.
-6. Guidelines: ${(rundown.generalAi.guidelines ?? []).join(" ")}`;
+5. Rundown Situational Awareness:
+   - Place in event: ${rundown.placeInEvent ?? rundown.currentCueTitle ?? "Unknown"}
+   - Timing: ${progressLine}
+   - Next up: ${nextItemLine}
+   - Use advisory durations (elapsed/expected) and any active auto-advance timer (timerSec) to judge pacing; when a transition or timer is imminent, prefer holding the current shot or pre-positioning Preview (prepare_only) for nextItem.
+6. Style: ${rundown.generalAi.style ?? "Dignified, calm Nordic Lutheran liturgy"} | Pacing: ${pacing}.
+7. Guidelines: ${(rundown.generalAi.guidelines ?? []).join(" ")}`;
 
     const userPayload = {
       trigger,
+      event: {
+        title: rundown.title,
+        service: rundown.service,
+        church: rundown.church,
+        date: rundown.date,
+      },
+      rundownProgress: rundown.progress ?? {
+        placeInEvent: rundown.placeInEvent,
+        summary: progressLine,
+      },
       switcher: {
         programInput: switcher.programInput,
         previewInput: switcher.previewInput,
@@ -124,9 +151,13 @@ Hard Broadcast Rules:
         id: rundown.currentCueId,
         title: rundown.currentCueTitle,
         section: rundown.currentSection,
+        placeInEvent: rundown.placeInEvent,
         speaker: rundown.assignedSpeaker,
+        expectedDurationSec: rundown.expectedDurationSec,
+        timerSec: rundown.timerSec,
         aiInstructions: rundown.currentItemAi,
       },
+      nextItem: rundown.nextItem,
       humanSteering: steering,
       recentDecisions: rollingShots,
       recentTranscripts: transcripts

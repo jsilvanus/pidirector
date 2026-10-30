@@ -155,29 +155,86 @@ export class EventIngestor {
         if (data?.["ceremony"]) {
           this.world.updateRundownContext({
             title: data["ceremony"]["title"],
+            service: data["ceremony"]["service"],
+            church: data["ceremony"]["church"],
+            date: data["ceremony"]["date"],
+            currentIndex: data["ceremony"]["currentIndex"],
+            totalItems: data["ceremony"]["totalItems"],
+            placeInEvent: data["ceremony"]["placeInEvent"],
             currentCueId: data["ceremony"]["currentCueId"],
             currentCueTitle: data["ceremony"]["currentCueTitle"],
+            currentSection: data["ceremony"]["currentSection"],
             assignedSpeaker: data["ceremony"]["assignedSpeaker"],
+            progress: data["ceremony"]["progress"],
+            nextItem: data["ceremony"]["nextItem"],
           });
         }
         break;
       }
 
       case "rundown":
+      case "rundown_state":
       case "cue:triggered": {
+        const prevCueId = this.world.getRundown().currentCueId;
+        const currentItem = data?.["currentItem"] as Record<string, any> | undefined;
+        const nextCueId =
+          data?.["currentCueId"] ??
+          data?.["cueId"] ??
+          currentItem?.["id"] ??
+          data?.["id"] ??
+          undefined;
+        const nextCueTitle =
+          data?.["currentCueTitle"] ??
+          data?.["cueTitle"] ??
+          currentItem?.["title"] ??
+          data?.["itemTitle"] ??
+          undefined;
+        const nextSection =
+          data?.["currentSection"] ??
+          currentItem?.["section"] ??
+          data?.["section"] ??
+          undefined;
+
         this.world.updateRundownContext({
           title: data?.["title"],
-          currentCueId: data?.["currentCueId"] ?? data?.["cueId"] ?? data?.["id"],
-          currentCueTitle: data?.["currentCueTitle"] ?? data?.["cueTitle"] ?? data?.["itemTitle"],
-          currentSection: data?.["currentSection"] ?? data?.["section"],
-          assignedSpeaker: data?.["assignedSpeaker"] ?? data?.["speaker"],
+          service: data?.["service"],
+          church: data?.["church"],
+          date: data?.["date"],
+          currentIndex:
+            typeof data?.["currentIndex"] === "number"
+              ? data["currentIndex"]
+              : typeof currentItem?.["index"] === "number"
+                ? currentItem["index"]
+                : undefined,
+          totalItems:
+            typeof data?.["totalItems"] === "number" ? data["totalItems"] : undefined,
+          placeInEvent:
+            data?.["placeInEvent"] ?? data?.["progress"]?.["placeInEvent"] ?? undefined,
+          currentCueId: nextCueId,
+          currentCueTitle: nextCueTitle,
+          currentSection: nextSection,
+          assignedSpeaker:
+            data?.["assignedSpeaker"] ??
+            data?.["speaker"] ??
+            data?.["variables"]?.["preacher"] ??
+            undefined,
+          expectedDurationSec:
+            data?.["expectedDurationSec"] ?? currentItem?.["expectedDurationSec"] ?? undefined,
+          timerSec: data?.["timerSec"] ?? currentItem?.["timerSec"] ?? undefined,
+          progress: data?.["progress"],
+          nextItem: data?.["nextItem"],
           generalAi: data?.["generalAi"] ?? data?.["aiGeneral"],
           currentItemAi: data?.["currentItemAi"] ?? data?.["ai"],
           defaultActions: data?.["defaultActions"] ?? data?.["actions"],
         });
 
-        if (this.autoEvaluateOnCue && this.engine.getMode() !== "manual") {
-          const cueLabel = data?.["currentCueId"] ?? data?.["cueId"] ?? "cue_change";
+        const cueChanged = nextCueId !== undefined && nextCueId !== prevCueId;
+        if (
+          this.autoEvaluateOnCue &&
+          this.engine.getMode() !== "manual" &&
+          (type === "cue:triggered" || type === "rundown" || cueChanged)
+        ) {
+          const cueLabel = nextCueId ?? "cue_change";
           await this.engine.evaluate(`rundown_cue:${cueLabel}`, { tier: "reasoning" });
         }
         break;

@@ -560,3 +560,147 @@ test("Rolling context (recentDecisions & transcripts) is passed to Ollama and hu
 
   await app.close();
 });
+
+test("Rundown situational awareness: placeInEvent, hierarchical timing, nextItem + cue, and timer/duration in Ollama prompt and logs", async () => {
+  let lastSystemPrompt = "";
+  let lastUserPayload: any = null;
+
+  const mockFetch: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/chat")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      lastSystemPrompt = String(body.messages?.[0]?.content ?? "");
+      lastUserPayload = JSON.parse(body.messages?.[1]?.content ?? "{}");
+
+      return new Response(
+        JSON.stringify({
+          message: {
+            content: JSON.stringify({
+              thought: "Pre-position Cam 1 for upcoming Lord's Prayer while holding Cam 3 during prayer for dead.",
+              recommendedAction: "prepare_only",
+              prepareCamera: { camera: 1, preset: "altar" },
+              transition: "cut",
+              rationale: "Preparing wide altar shot on Cam 1 for next item (Lord's Prayer).",
+            }),
+          },
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), {
+      status: 200,
+    });
+  };
+
+  const config = loadConfig({ PIDIRECTOR_MODE: "autonomous" });
+  const { app } = buildApp(config, { fetchFn: mockFetch, autoEvaluateOnCue: false });
+  await app.ready();
+
+  // Ingest full pirundown status snapshot with hierarchical progress and nextItem
+  await app.inject({
+    method: "POST",
+    url: "/api/v1/ingest/event",
+    payload: {
+      type: "rundown_state",
+      data: {
+        title: "Sunday High Mass",
+        service: "Messu",
+        church: "Keskuskirkko",
+        date: "2026-11-01",
+        currentIndex: 3,
+        totalItems: 18,
+        currentItem: {
+          id: "sub3_dead",
+          title: "prayer for dead",
+          section: "intercession",
+          expectedDurationSec: 183,
+          timerSec: null,
+        },
+        progress: {
+          placeInEvent: "4/18 prayer for dead",
+          service: {
+            elapsedSec: 1563,
+            expectedDurationSec: 4500,
+            timing: "26:03/1:15:00",
+            overtime: false,
+          },
+          section: {
+            index: 3,
+            total: 15,
+            place: "3/15",
+            id: "sec3_intercession",
+            title: "intercession",
+            elapsedSec: 300,
+            expectedDurationSec: 900,
+            timerSec: null,
+            timing: "5:00/15:00",
+            overtime: false,
+          },
+          subsection: {
+            index: 3,
+            total: 5,
+            place: "3/5",
+            id: "sub3_dead",
+            title: "prayer for dead",
+            elapsedSec: 120,
+            expectedDurationSec: 183,
+            timerSec: null,
+            timing: "2:00/3:03",
+            overtime: false,
+          },
+          summary:
+            "Whole service 26:03/1:15:00, currently section 3/15 intercession 5:00/15:00, subsection 3/5 prayer for dead 2:00/3:03",
+        },
+        nextItem: {
+          id: "sub4_lords_prayer",
+          line: 8,
+          index: 4,
+          title: "Lord's Prayer",
+          section: "intercession",
+          cueSummary: 'Exact: "Our Father in heaven"',
+          cue: { type: "phrase", phrase: "Our Father in heaven" },
+          expectedDurationSec: 5,
+          timerSec: 10,
+          ai: "Hold wide shot during Lord's Prayer",
+        },
+      },
+    },
+  });
+
+  // Evaluate
+  const evalRes = await app.inject({
+    method: "POST",
+    url: "/api/v1/evaluate",
+    payload: { trigger: "pacing_check", bypassDwell: true },
+  });
+  assert.equal(evalRes.statusCode, 200);
+
+  // Verify system prompt and user payload passed to Ollama
+  assert.match(lastSystemPrompt, /4\/18 prayer for dead/);
+  assert.match(
+    lastSystemPrompt,
+    /Whole service 26:03\/1:15:00, currently section 3\/15 intercession 5:00\/15:00, subsection 3\/5 prayer for dead 2:00\/3:03/
+  );
+  assert.match(lastSystemPrompt, /Lord's Prayer \(Cue: Exact: "Our Father in heaven"\)/);
+
+  assert.equal(lastUserPayload.event.title, "Sunday High Mass");
+  assert.equal(lastUserPayload.event.service, "Messu");
+  assert.equal(lastUserPayload.rundownProgress.placeInEvent, "4/18 prayer for dead");
+  assert.equal(
+    lastUserPayload.rundownProgress.summary,
+    "Whole service 26:03/1:15:00, currently section 3/15 intercession 5:00/15:00, subsection 3/5 prayer for dead 2:00/3:03"
+  );
+  assert.equal(lastUserPayload.nextItem.id, "sub4_lords_prayer");
+  assert.equal(lastUserPayload.nextItem.cueSummary, 'Exact: "Our Father in heaven"');
+  assert.equal(lastUserPayload.nextItem.expectedDurationSec, 5);
+  assert.equal(lastUserPayload.nextItem.timerSec, 10);
+
+  // Verify human-readable log includes placeInEvent
+  const logsRes = await app.inject({
+    method: "GET",
+    url: "/api/v1/logs?format=text",
+  });
+  assert.match(logsRes.body, /Cue: 4\/18 prayer for dead/);
+
+  await app.close();
+});
