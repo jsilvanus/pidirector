@@ -1,0 +1,33 @@
+{
+  "name": "pidirector",
+  "version": "0.1.0",
+  "description": "Autonomous and semi-autonomous Local AI Stream Director for live worship broadcasts in the Pi Ecosystem",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "tsx --test tests/**/*.test.ts",
+    "cli": "tsx src/cli.ts"
+  },
+  "bin": {
+    "pidirector": "bin/pidirector.mjs"
+  },
+  "dependencies": {
+    "fastify": "^5.2.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.3"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ]
+}
