@@ -15,6 +15,7 @@ export interface BuildAppOptions {
   fetchFn?: typeof fetch | undefined;
   autoEvaluateOnCue?: boolean | undefined;
   decisionLogPath?: string | undefined;
+  broadcastsDir?: string | undefined;
 }
 
 export interface BuildAppResult {
@@ -39,6 +40,7 @@ export function buildApp(config: AppConfig, options?: BuildAppOptions): BuildApp
   const decisionLogger = new DecisionLogger({
     eventBroker,
     logFilePath: options?.decisionLogPath ?? config.decisionLogPath,
+    broadcastsDir: options?.broadcastsDir ?? config.broadcastsDir,
   });
   const world = new WorldTracker(eventBroker, config.minShotDwellSec, config.maxShotDwellSec);
   const cameraMotion = new CameraMotionTracker(eventBroker, {

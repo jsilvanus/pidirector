@@ -506,6 +506,101 @@
           }
         }
       }
+    },
+    "/api/v1/broadcast": {
+      "get": {
+        "operationId": "getCurrentBroadcast",
+        "summary": "Get current active broadcast snapshot including event metadata, steering notes, structured logs, and stats",
+        "responses": {
+          "200": {
+            "description": "Active broadcast snapshot"
+          }
+        }
+      }
+    },
+    "/api/v1/broadcast/dump": {
+      "post": {
+        "operationId": "dumpBroadcast",
+        "summary": "Dump and save the current broadcast (with steering notes and structured decision logs) to a per-broadcast JSON file",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reset": { "type": "boolean", "default": false },
+                  "broadcastId": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Broadcast dumped and saved"
+          }
+        }
+      }
+    },
+    "/api/v1/broadcast/end": {
+      "post": {
+        "operationId": "endBroadcast",
+        "summary": "Stop AI directing, dump and save the completed broadcast (notes + logs) to disk, and reset for the next broadcast",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": { "type": "string" },
+                  "actor": { "type": "string" },
+                  "broadcastId": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Broadcast ended, saved, and reset"
+          }
+        }
+      }
+    },
+    "/api/v1/broadcasts": {
+      "get": {
+        "operationId": "listBroadcasts",
+        "summary": "List saved per-broadcast archives on disk",
+        "responses": {
+          "200": {
+            "description": "List of saved broadcast archives"
+          }
+        }
+      }
+    },
+    "/api/v1/broadcasts/{id}": {
+      "get": {
+        "operationId": "getBroadcastById",
+        "summary": "Retrieve a saved per-broadcast archive (notes + structured decision logs)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved broadcast archive"
+          },
+          "404": {
+            "description": "Broadcast archive not found"
+          }
+        }
+      }
     }
   }
 }

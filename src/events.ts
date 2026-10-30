@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type {
   AdvisoryShot,
+  BroadcastStats,
   CameraMotionSnapshot,
   DecisionHistoryEntry,
   DirectorDecision,
@@ -20,7 +21,8 @@ export type DirectorEvent =
   | { type: "executed"; data: DecisionHistoryEntry }
   | { type: "suppressed"; data: { trigger: string; reason: string; decision: DirectorDecision; time: string } }
   | { type: "preempted"; data: { reason: string; actor: string; previousMode: DirectorMode; newMode: DirectorMode; time: string } }
-  | { type: "log"; data: DirectorLogEntry };
+  | { type: "log"; data: DirectorLogEntry }
+  | { type: "broadcast-dumped"; data: { broadcastId: string; filePath: string; endedAt: string; stats: BroadcastStats } };
 
 export class DirectorEventBroker {
   private readonly emitter = new EventEmitter();

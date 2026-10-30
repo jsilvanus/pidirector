@@ -1,4 +1,4 @@
-import { formatLogsForCli } from "./state/decision-logger.js";
+import { formatBroadcastForCli, formatLogsForCli } from "./state/decision-logger.js";
 
 const baseUrl = (process.env["PIDIRECTOR_URL"] ?? "http://127.0.0.1:3450").replace(/\/+$/, "");
 
@@ -223,6 +223,63 @@ async function run(): Promise<void> {
       break;
     }
 
+    case "dump": {
+      const reset = args.includes("--reset");
+      const data = await request("/api/v1/broadcast/dump", "POST", { reset });
+      if (args.includes("--json")) {
+        console.log(JSON.stringify(data, null, 2));
+      } else {
+        console.log(`Saved broadcast log to: ${data.filePath}\n`);
+        console.log(formatBroadcastForCli(data.broadcast));
+      }
+      break;
+    }
+
+    case "end": {
+      const reason = args.filter((a) => !a.startsWith("--")).join(" ").trim() || "CLI broadcast ended";
+      const data = await request("/api/v1/broadcast/end", "POST", {
+        reason,
+        actor: "cli-operator",
+      });
+      if (args.includes("--json")) {
+        console.log(JSON.stringify(data, null, 2));
+      } else {
+        console.log(`Broadcast ended and saved to: ${data.filePath}\n`);
+        console.log(formatBroadcastForCli(data.broadcast));
+      }
+      break;
+    }
+
+    case "broadcasts": {
+      const data = await request("/api/v1/broadcasts");
+      if (args.includes("--json")) {
+        console.log(JSON.stringify(data, null, 2));
+      } else if (!Array.isArray(data.broadcasts) || data.broadcasts.length === 0) {
+        console.log("(No saved broadcasts yet)");
+      } else {
+        for (const b of data.broadcasts) {
+          const title = [b.event?.title, b.event?.service].filter(Boolean).join(" — ") || "Service";
+          console.log(
+            `${b.broadcastId} | ${title} | ${b.startedAt} -> ${b.endedAt ?? "active"} | ${b.stats?.totalDecisions ?? 0} decisions, ${b.stats?.steeringNotesTotal ?? 0} notes`
+          );
+        }
+      }
+      break;
+    }
+
+    case "broadcast": {
+      const idArg = args.find((a) => !a.startsWith("--"));
+      const data = idArg
+        ? await request(`/api/v1/broadcasts/${encodeURIComponent(idArg)}`)
+        : await request("/api/v1/broadcast");
+      if (args.includes("--json")) {
+        console.log(JSON.stringify(data.broadcast, null, 2));
+      } else {
+        console.log(formatBroadcastForCli(data.broadcast));
+      }
+      break;
+    }
+
     case "history": {
       const data = await request("/api/v1/history");
       console.log(JSON.stringify(data, null, 2));
@@ -257,6 +314,10 @@ Co-Pilot & Inspection Commands:
   pidirector dismiss <advisoryId>                    Dismiss a pending advisory shot
   pidirector cameras                                 Inspect FreeD camera motion & settled states
   pidirector logs [--json]                           View human-readable director decision log
+  pidirector dump [--reset] [--json]                 Dump & save current broadcast (notes + logs) to file
+  pidirector end [reason] [--json]                   End broadcast, save per-broadcast dump, and reset
+  pidirector broadcast [broadcastId] [--json]        View current or saved broadcast with notes & logs
+  pidirector broadcasts [--json]                     List saved per-broadcast archives
   pidirector history                                 View recent directorial decisions & MCP calls
   pidirector openapi                                 Print the OpenAPI 3.1.0 specification`);
       break;

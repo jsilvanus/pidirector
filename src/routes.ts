@@ -49,6 +49,8 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
     const ollamaHealthy = await ollama.isHealthy();
     return {
       service: "pidirector",
+      broadcastId: decisionLogger.getBroadcastId(),
+      broadcastStartedAt: decisionLogger.getStartedAt(),
       mode: engine.getMode(),
       lastActiveMode: engine.getLastActiveMode(),
       ollamaHealthy,
@@ -346,13 +348,88 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDependencies): v
     const limit = query.limit ? Number.parseInt(query.limit, 10) : 50;
     const safeLimit = Number.isNaN(limit) ? 50 : limit;
     const logs = decisionLogger.getEntries(safeLimit);
+    const steering = world.getSteering();
+    const rundown = world.getRundown();
 
     if (query.format === "text") {
       return reply.type("text/plain; charset=utf-8").send(formatLogsForCli(logs));
     }
 
     return {
+      broadcastId: decisionLogger.getBroadcastId(),
+      startedAt: decisionLogger.getStartedAt(),
+      event: {
+        title: rundown.title,
+        service: rundown.service,
+        church: rundown.church,
+        date: rundown.date,
+      },
+      notes: steering.notes,
       logs,
+    };
+  });
+
+  app.get("/api/v1/broadcast", async () => {
+    return {
+      broadcast: decisionLogger.buildBroadcastSnapshot(world),
+    };
+  });
+
+  app.post("/api/v1/broadcast/dump", async (request) => {
+    const body = (request.body ?? {}) as {
+      reset?: boolean;
+      broadcastId?: string;
+    };
+    const res = decisionLogger.dumpBroadcast(world, {
+      reset: body.reset,
+      broadcastId: body.broadcastId,
+    });
+    return {
+      ok: true,
+      filePath: res.filePath,
+      broadcast: res.broadcast,
+      activeBroadcastId: decisionLogger.getBroadcastId(),
+    };
+  });
+
+  app.post("/api/v1/broadcast/end", async (request) => {
+    const body = (request.body ?? {}) as {
+      reason?: string;
+      actor?: string;
+      broadcastId?: string;
+    };
+    const stopRes = engine.stop(
+      body.reason ?? "Broadcast ended",
+      body.actor ?? "operator"
+    );
+    const dumpRes = decisionLogger.dumpBroadcast(world, {
+      reset: true,
+      broadcastId: body.broadcastId,
+    });
+    return {
+      ok: true,
+      stop: stopRes,
+      filePath: dumpRes.filePath,
+      broadcast: dumpRes.broadcast,
+      nextBroadcastId: decisionLogger.getBroadcastId(),
+    };
+  });
+
+  app.get("/api/v1/broadcasts", async () => {
+    return {
+      broadcasts: decisionLogger.listBroadcastDumps(),
+    };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/v1/broadcasts/:id", async (request, reply) => {
+    const dump = decisionLogger.getBroadcastDump(request.params.id);
+    if (!dump) {
+      return reply.code(404).send({
+        error: `Broadcast '${request.params.id}' not found`,
+      });
+    }
+    return {
+      broadcast: dump,
     };
   });
 

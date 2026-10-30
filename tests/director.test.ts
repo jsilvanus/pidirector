@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
-import { formatLogsForCli } from "../src/state/decision-logger.js";
+import { formatBroadcastForCli, formatLogsForCli } from "../src/state/decision-logger.js";
 
 test("CameraMotionTracker tracks FreeD motion:moving, motion:stopped, preset:settled and raw FreeD packets", async () => {
   const config = loadConfig({ PIDIRECTOR_MODE: "advisory" });
@@ -844,6 +844,120 @@ test("Steering notes durability: broadcast, section, subsection, timer expiratio
   });
   assert.equal(world.getSteering().activeNotes.length, 1);
   assert.equal(world.getSteering().activeNotes[0]?.id, broadcastId);
+
+  await app.close();
+});
+
+test("Per-broadcast log and steering notes dump, save to disk, list, retrieve, and reset after broadcast ends", async (t) => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pidirector-broadcasts-"));
+  t.after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  const mockFetch: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/api/chat")) {
+      return new Response(
+        JSON.stringify({
+          message: {
+            content: JSON.stringify({
+              thought: "Cut to Cam 2 for sermon",
+              recommendedAction: "cut",
+              cutToInput: 2,
+              transition: "cut",
+              rationale: "Sermon begins on pulpit Cam 2",
+            }),
+          },
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { status: 200 });
+  };
+
+  const config = loadConfig({
+    PIDIRECTOR_MODE: "autonomous",
+    PIDIRECTOR_BROADCASTS_DIR: tmpDir,
+  });
+  const { app, world } = buildApp(config, { fetchFn: mockFetch, autoEvaluateOnCue: false });
+  await app.ready();
+
+  // 1. Set broadcast event metadata and add steering note + evaluate a cut
+  world.updateRundownContext({
+    title: "Sunday High Mass",
+    service: "Messu",
+    church: "Keskuskirkko",
+    date: "2026-11-01",
+    placeInEvent: "6/18 Saarna",
+    currentCueId: "saarna",
+    currentCueTitle: "Saarna",
+  });
+
+  await app.inject({
+    method: "POST",
+    url: "/api/v1/steer/notes",
+    payload: {
+      text: "Guest bishop preaching from lectern today",
+      scope: "broadcast",
+    },
+  });
+
+  await app.inject({
+    method: "POST",
+    url: "/api/v1/evaluate",
+    payload: { trigger: "sermon_start", bypassDwell: true },
+  });
+
+  // 2. End broadcast -> stops director, saves per-broadcast JSON file (notes + logs + stats), and resets for next broadcast
+  const endRes = await app.inject({
+    method: "POST",
+    url: "/api/v1/broadcast/end",
+    payload: { reason: "Postlude finished" },
+  });
+  assert.equal(endRes.statusCode, 200);
+  const endJson = endRes.json();
+  assert.equal(endJson.ok, true);
+  assert.ok(endJson.filePath.endsWith(".json"));
+  assert.equal(endJson.broadcast.event.title, "Sunday High Mass");
+  assert.equal(endJson.broadcast.notes.length, 1);
+  assert.equal(endJson.broadcast.notes[0].text, "Guest bishop preaching from lectern today");
+  assert.equal(endJson.broadcast.stats.cutsExecuted, 1);
+  assert.equal(endJson.broadcast.stats.steeringNotesTotal, 1);
+
+  // Verify CLI formatter renders the broadcast dump with notes and logs
+  const cliBroadcastText = formatBroadcastForCli(endJson.broadcast);
+  assert.match(cliBroadcastText, /Sunday High Mass — Messu — Keskuskirkko/);
+  assert.match(cliBroadcastText, /Guest bishop preaching from lectern today/);
+  assert.match(cliBroadcastText, /CUT → Cam 2/);
+
+  // 3. Verify active session was reset cleanly for the next broadcast
+  const activeLogsRes = await app.inject({
+    method: "GET",
+    url: "/api/v1/logs",
+  });
+  const activeLogs = activeLogsRes.json();
+  assert.equal(activeLogs.logs.length, 0);
+  assert.equal(activeLogs.notes.length, 0);
+  assert.notEqual(activeLogs.broadcastId, endJson.broadcast.broadcastId);
+
+  // 4. List saved broadcasts and fetch the saved broadcast by ID
+  const listRes = await app.inject({
+    method: "GET",
+    url: "/api/v1/broadcasts",
+  });
+  assert.equal(listRes.statusCode, 200);
+  const listJson = listRes.json();
+  assert.equal(listJson.broadcasts.length, 1);
+  assert.equal(listJson.broadcasts[0].broadcastId, endJson.broadcast.broadcastId);
+
+  const getSavedRes = await app.inject({
+    method: "GET",
+    url: `/api/v1/broadcasts/${endJson.broadcast.broadcastId}`,
+  });
+  assert.equal(getSavedRes.statusCode, 200);
+  const savedBroadcast = getSavedRes.json().broadcast;
+  assert.equal(savedBroadcast.notes.length, 1);
+  assert.ok(savedBroadcast.logs.some((l: any) => l.category === "cut"));
 
   await app.close();
 });

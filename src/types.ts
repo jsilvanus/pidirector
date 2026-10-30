@@ -314,3 +314,31 @@ export interface DirectorLogEntry {
   } | undefined;
 }
 
+export interface BroadcastStats {
+  totalLogs: number;
+  totalDecisions: number;
+  cutsExecuted: number;
+  preparesExecuted: number;
+  holds: number;
+  advisoriesIssued: number;
+  guardrailSuppressions: number;
+  humanPreemptions: number;
+  steeringNotesTotal: number;
+}
+
+export interface BroadcastDump {
+  broadcastId: string;
+  startedAt: string;
+  endedAt: string | null;
+  event: {
+    title: string | null;
+    service: string | null;
+    church: string | null;
+    date: string | null;
+  };
+  steering: HumanSteeringState;
+  notes: SteeringNote[];
+  logs: DirectorLogEntry[];
+  stats: BroadcastStats;
+}
+

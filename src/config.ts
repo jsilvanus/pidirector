@@ -22,6 +22,7 @@ export interface AppConfig {
   inputCameraMap: Record<number, string>;
   autoConnectSse: boolean;
   decisionLogPath?: string | undefined;
+  broadcastsDir: string;
   rollingDecisionWindow: number;
   rollingTranscriptWindow: number;
 }
@@ -71,6 +72,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   const autoConnectSse = env["PIDIRECTOR_AUTO_SSE"] === "true";
   const decisionLogPath = env["PIDIRECTOR_LOG_FILE"]?.trim() || undefined;
+  const broadcastsDir = env["PIDIRECTOR_BROADCASTS_DIR"]?.trim() || "data/broadcasts";
   const rollingDecisionWindow = Number.parseInt(env["PIDIRECTOR_ROLLING_DECISIONS"] ?? "5", 10);
   const rollingTranscriptWindow = Number.parseInt(env["PIDIRECTOR_ROLLING_TRANSCRIPTS"] ?? "6", 10);
 
@@ -96,6 +98,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     inputCameraMap,
     autoConnectSse,
     decisionLogPath,
+    broadcastsDir,
     rollingDecisionWindow: Number.isNaN(rollingDecisionWindow) ? 5 : rollingDecisionWindow,
     rollingTranscriptWindow: Number.isNaN(rollingTranscriptWindow) ? 6 : rollingTranscriptWindow,
   };

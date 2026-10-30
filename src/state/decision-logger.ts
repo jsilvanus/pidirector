@@ -1,8 +1,18 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import type { DirectorEventBroker } from "../events.js";
+import type { WorldTracker } from "./world-tracker.js";
 import type {
   AdvisoryShot,
+  BroadcastDump,
+  BroadcastStats,
   DirectorDecision,
   DirectorLogCategory,
   DirectorLogEntry,
@@ -15,6 +25,7 @@ import type {
 export interface DecisionLoggerOptions {
   eventBroker?: DirectorEventBroker | undefined;
   logFilePath?: string | undefined;
+  broadcastsDir?: string | undefined;
   maxEntries?: number | undefined;
 }
 
@@ -25,6 +36,16 @@ function formatTimeShort(iso: string): string {
   } catch {
     return iso.slice(11, 19);
   }
+}
+
+function sanitizeSlug(text: string): string {
+  return (
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "broadcast"
+  );
 }
 
 export function formatDecisionTarget(decision: DirectorDecision): string {
@@ -67,23 +88,273 @@ export function formatLogsForCli(entries: DirectorLogEntry[]): string {
   return entries.map(formatLogEntryForCli).join("\n");
 }
 
+export function formatBroadcastForCli(dump: BroadcastDump): string {
+  const eventTitle =
+    [dump.event.title, dump.event.service, dump.event.church].filter(Boolean).join(" — ") ||
+    "Unnamed Broadcast";
+  const lines: string[] = [
+    `Broadcast: ${dump.broadcastId} (${eventTitle})`,
+    `Started:   ${dump.startedAt}${dump.endedAt ? ` | Ended: ${dump.endedAt}` : " (Active)"}`,
+    `Stats:     ${dump.stats.totalDecisions} decisions (${dump.stats.cutsExecuted} cuts, ${dump.stats.preparesExecuted} prepares, ${dump.stats.holds} holds, ${dump.stats.guardrailSuppressions} guardrails, ${dump.stats.humanPreemptions} preemptions)`,
+  ];
+
+  if (dump.notes.length > 0) {
+    lines.push("", "Steering Notes:");
+    for (const note of dump.notes) {
+      const state = note.expired
+        ? `EXPIRED:${note.expiredReason ?? "expired"}`
+        : note.enabled
+          ? "ACTIVE"
+          : "OFF";
+      lines.push(`  - [${note.id}] [${state}] (${note.scope}) ${note.text}`);
+    }
+  }
+
+  lines.push("", "Decision Log:");
+  if (dump.logs.length === 0) {
+    lines.push("  (No log entries)");
+  } else {
+    for (const entry of dump.logs) {
+      lines.push(`  ${formatLogEntryForCli(entry)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 export class DecisionLogger {
   private readonly entries: DirectorLogEntry[] = [];
   private readonly eventBroker?: DirectorEventBroker | undefined;
   private readonly logFilePath?: string | undefined;
+  private readonly broadcastsDir: string;
   private readonly maxEntries: number;
   private seq = 1;
+  private broadcastSeq = 1;
+  private broadcastId: string;
+  private startedAt: string;
   private dirCreated = false;
 
   constructor(options: DecisionLoggerOptions = {}) {
     this.eventBroker = options.eventBroker;
     this.logFilePath = options.logFilePath;
-    this.maxEntries = options.maxEntries ?? 200;
+    this.broadcastsDir = path.resolve(options.broadcastsDir ?? "data/broadcasts");
+    this.maxEntries = options.maxEntries ?? 500;
+    this.startedAt = new Date().toISOString();
+    this.broadcastId = this.generateBroadcastId();
     this.loadFromDisk();
+  }
+
+  private generateBroadcastId(title?: string | null, dateStr?: string | null): string {
+    const now = new Date();
+    const day = dateStr || now.toISOString().slice(0, 10);
+    const timePart = now.toISOString().slice(11, 19).replace(/:/g, "");
+    const slug = sanitizeSlug(title || "service");
+    return `${day}_${slug}_${timePart}_${this.broadcastSeq++}`;
+  }
+
+  getBroadcastId(): string {
+    return this.broadcastId;
+  }
+
+  getStartedAt(): string {
+    return this.startedAt;
   }
 
   getEntries(limit = 50): DirectorLogEntry[] {
     return this.entries.slice(-limit).map((e) => structuredClone(e));
+  }
+
+  computeStats(notesCount = 0): BroadcastStats {
+    let totalDecisions = 0;
+    let cutsExecuted = 0;
+    let preparesExecuted = 0;
+    let holds = 0;
+    let advisoriesIssued = 0;
+    let guardrailSuppressions = 0;
+    let humanPreemptions = 0;
+
+    for (const e of this.entries) {
+      if (
+        e.category === "cut" ||
+        e.category === "prepare" ||
+        e.category === "hold" ||
+        e.category === "advisory" ||
+        e.category === "suppressed" ||
+        e.category === "fallback"
+      ) {
+        totalDecisions += 1;
+      }
+      if ((e.category === "cut" || e.category === "fallback") && e.executed) {
+        cutsExecuted += 1;
+      } else if (e.category === "prepare" && e.executed) {
+        preparesExecuted += 1;
+      } else if (e.category === "hold") {
+        holds += 1;
+      } else if (e.category === "advisory") {
+        advisoriesIssued += 1;
+      } else if (e.category === "suppressed") {
+        guardrailSuppressions += 1;
+      } else if (e.category === "preempt") {
+        humanPreemptions += 1;
+      }
+    }
+
+    return {
+      totalLogs: this.entries.length,
+      totalDecisions,
+      cutsExecuted,
+      preparesExecuted,
+      holds,
+      advisoriesIssued,
+      guardrailSuppressions,
+      humanPreemptions,
+      steeringNotesTotal: notesCount,
+    };
+  }
+
+  buildBroadcastSnapshot(
+    world: WorldTracker,
+    options?: { endedAt?: string | null | undefined; customId?: string | undefined }
+  ): BroadcastDump {
+    const rundown = world.getRundown();
+    const steering = world.getSteering();
+    const broadcastId =
+      options?.customId ??
+      (this.broadcastId.includes("_service_") && rundown.title
+        ? this.generateBroadcastId(rundown.title, rundown.date)
+        : this.broadcastId);
+    this.broadcastId = broadcastId;
+
+    return {
+      broadcastId,
+      startedAt: this.startedAt,
+      endedAt: options?.endedAt ?? null,
+      event: {
+        title: rundown.title,
+        service: rundown.service,
+        church: rundown.church,
+        date: rundown.date,
+      },
+      steering,
+      notes: steering.notes.map((n) => ({ ...n })),
+      logs: this.entries.map((e) => structuredClone(e)),
+      stats: this.computeStats(steering.notes.length),
+    };
+  }
+
+  /**
+   * Dumps the current broadcast (including all steering notes and structured decision logs)
+   * into a per-broadcast JSON file on disk (`<broadcastsDir>/<broadcastId>.json`).
+   * If `options.reset` is true, starts a fresh broadcast session (clearing logs and steering notes).
+   */
+  dumpBroadcast(
+    world: WorldTracker,
+    options?: { reset?: boolean | undefined; broadcastId?: string | undefined }
+  ): {
+    broadcast: BroadcastDump;
+    filePath: string;
+  } {
+    const endedAt = new Date().toISOString();
+    const broadcast = this.buildBroadcastSnapshot(world, {
+      endedAt,
+      customId: options?.broadcastId,
+    });
+
+    mkdirSync(this.broadcastsDir, { recursive: true });
+    const fileName = `${broadcast.broadcastId}.json`;
+    const filePath = path.join(this.broadcastsDir, fileName);
+    writeFileSync(filePath, JSON.stringify(broadcast, null, 2), "utf8");
+
+    this.eventBroker?.emit({
+      type: "broadcast-dumped" as any,
+      data: {
+        broadcastId: broadcast.broadcastId,
+        filePath,
+        endedAt,
+        stats: broadcast.stats,
+      },
+    });
+
+    if (options?.reset) {
+      this.resetBroadcast(world);
+    }
+
+    return {
+      broadcast,
+      filePath,
+    };
+  }
+
+  resetBroadcast(world?: WorldTracker): { broadcastId: string; startedAt: string } {
+    this.entries.length = 0;
+    this.seq = 1;
+    this.startedAt = new Date().toISOString();
+    const rundown = world?.getRundown();
+    this.broadcastId = this.generateBroadcastId(rundown?.title, rundown?.date);
+    if (world) {
+      world.resetBroadcastSteering();
+    }
+    return {
+      broadcastId: this.broadcastId,
+      startedAt: this.startedAt,
+    };
+  }
+
+  listBroadcastDumps(): Array<{
+    broadcastId: string;
+    fileName: string;
+    filePath: string;
+    startedAt: string;
+    endedAt: string | null;
+    event: BroadcastDump["event"];
+    stats: BroadcastStats;
+  }> {
+    if (!existsSync(this.broadcastsDir)) return [];
+    const files = readdirSync(this.broadcastsDir)
+      .filter((f) => f.endsWith(".json"))
+      .sort()
+      .reverse();
+
+    const out: Array<{
+      broadcastId: string;
+      fileName: string;
+      filePath: string;
+      startedAt: string;
+      endedAt: string | null;
+      event: BroadcastDump["event"];
+      stats: BroadcastStats;
+    }> = [];
+
+    for (const fileName of files) {
+      const filePath = path.join(this.broadcastsDir, fileName);
+      try {
+        const parsed = JSON.parse(readFileSync(filePath, "utf8")) as BroadcastDump;
+        if (parsed && typeof parsed.broadcastId === "string") {
+          out.push({
+            broadcastId: parsed.broadcastId,
+            fileName,
+            filePath,
+            startedAt: parsed.startedAt,
+            endedAt: parsed.endedAt,
+            event: parsed.event,
+            stats: parsed.stats,
+          });
+        }
+      } catch {
+        // Ignore malformed files
+      }
+    }
+    return out;
+  }
+
+  getBroadcastDump(broadcastId: string): BroadcastDump | null {
+    const cleanId = broadcastId.replace(/\.json$/i, "");
+    const filePath = path.join(this.broadcastsDir, `${cleanId}.json`);
+    if (!existsSync(filePath)) return null;
+    try {
+      return JSON.parse(readFileSync(filePath, "utf8")) as BroadcastDump;
+    } catch {
+      return null;
+    }
   }
 
   logDecisionOutcome(params: {

@@ -665,6 +665,27 @@ export class WorldTracker {
     return snap;
   }
 
+  resetBroadcastSteering(nowMs = Date.now()): HumanSteeringState {
+    this.steering = {
+      instruction: null,
+      notes: [],
+      activeNotes: [],
+      pacing: null,
+      lockCamera: null,
+      excludeCameras: [],
+      minShotDwellSec: null,
+      maxShotDwellSec: null,
+      disallowCongregationCloseup: null,
+      avoidCutsDuringPrayer: null,
+      disallowMoveWhileOnAir: null,
+      updatedAt: new Date(nowMs).toISOString(),
+    };
+    this.steeringNoteSeq = 1;
+    const snap = this.getSteering(nowMs);
+    this.eventBroker?.emit({ type: "steering-updated", data: snap });
+    return snap;
+  }
+
   /**
    * Computes effective constraints combining Rundown v2 AI constraints and Human Steering overrides
    */
