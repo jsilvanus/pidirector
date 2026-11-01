@@ -1,6 +1,6 @@
 # `pidirector` — Local AI Broadcast Director
 
-Autonomous and semi-autonomous **Local AI Stream Director** (`:3450`) for live worship broadcasts at Riihimäen Keskuskirkko in the Pi Ecosystem (`piecosystem`).
+Autonomous and semi-autonomous **Local AI Stream Director** (`:3401`) for live worship broadcasts at Riihimäen Keskuskirkko in the Pi Ecosystem (`piecosystem`).
 
 ## Key Capabilities
 

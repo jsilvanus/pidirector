@@ -857,7 +857,7 @@ test("Per-broadcast log and steering notes dump with pitube broadcast title, dat
   let pitubeAvailable = true;
   const mockFetch: typeof fetch = async (input) => {
     const url = String(input);
-    if (url.endsWith("/api/v1/status") && url.includes("3105")) {
+    if (url.endsWith("/api/v1/status") && url.includes("3500")) {
       if (!pitubeAvailable) {
         throw new Error("pitube offline");
       }
@@ -901,7 +901,7 @@ test("Per-broadcast log and steering notes dump with pitube broadcast title, dat
   const config = loadConfig({
     PIDIRECTOR_MODE: "autonomous",
     PIDIRECTOR_BROADCASTS_DIR: tmpDir,
-    PITUBE_URL: "http://127.0.0.1:3105",
+    PITUBE_URL: "http://127.0.0.1:3500",
   });
   const { app, world, decisionLogger } = buildApp(config, {
     fetchFn: mockFetch,

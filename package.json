@@ -36,7 +36,7 @@
     "service": "pidirector",
     "displayName": "PiDirector",
     "layer": "orchestration",
-    "port": 3450,
+    "port": 3401,
     "ports": {},
     "healthEndpoint": "/health",
     "envPortVar": "PIDIRECTOR_PORT"
