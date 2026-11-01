@@ -1,6 +1,6 @@
 import { formatBroadcastForCli, formatLogsForCli } from "./state/decision-logger.js";
 
-const baseUrl = (process.env["PIDIRECTOR_URL"] ?? "http://127.0.0.1:3450").replace(/\/+$/, "");
+const baseUrl = (process.env["PIDIRECTOR_URL"] ?? "http://127.0.0.1:3401").replace(/\/+$/, "");
 
 async function request(path: string, method = "GET", body?: unknown): Promise<any> {
   const res = await fetch(`${baseUrl}${path}`, {

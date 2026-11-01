@@ -4,6 +4,7 @@
   "description": "Autonomous and semi-autonomous Local AI Stream Director for live worship broadcasts in the Pi Ecosystem",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.23.0",
   "engines": {
     "node": ">=22"
   },
@@ -30,5 +31,14 @@
     "dist",
     "bin",
     "openapi"
-  ]
+  ],
+  "pi": {
+    "service": "pidirector",
+    "displayName": "PiDirector",
+    "layer": "Layer 3: Orchestration",
+    "port": 3401,
+    "ports": {},
+    "healthEndpoint": "/health",
+    "envPortVar": "PIDIRECTOR_PORT"
+  }
 }

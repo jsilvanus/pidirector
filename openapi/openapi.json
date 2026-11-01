@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://127.0.0.1:3450",
+      "url": "http://127.0.0.1:3401",
       "description": "Local pidirector daemon"
     }
   ],

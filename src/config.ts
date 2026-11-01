@@ -29,7 +29,7 @@ export interface AppConfig {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const port = Number.parseInt(env["PIDIRECTOR_PORT"] ?? "3450", 10);
+  const port = Number.parseInt(env["PIDIRECTOR_PORT"] ?? "3401", 10);
   const host = env["PIDIRECTOR_HOST"] ?? "0.0.0.0";
   const rawMode = env["PIDIRECTOR_MODE"]?.toLowerCase();
   const mode: DirectorMode =
@@ -42,13 +42,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const reasoningModel = env["PIDIRECTOR_REASONING_MODEL"] ?? "qwen2.5:7b-instruct";
   const ollamaTimeoutMs = Number.parseInt(env["PIDIRECTOR_OLLAMA_TIMEOUT_MS"] ?? "800", 10);
 
-  const mcpUrl = env["PICONTROL_MCP_URL"] ?? "http://127.0.0.1:3200/mcp";
+  const mcpUrl = env["PICONTROL_MCP_URL"] ?? "http://127.0.0.1:3600/mcp";
   const mcpToken = env["PIDIRECTOR_MCP_TOKEN"]?.trim() || undefined;
 
-  const pigatewayUrl = (env["PIGATEWAY_URL"] ?? "http://127.0.0.1:3100").replace(/\/+$/, "");
+  const pigatewayUrl = (env["PIGATEWAY_URL"] ?? "http://127.0.0.1:3000").replace(/\/+$/, "");
   const pirundownUrl = (env["PIRUNDOWN_URL"] ?? "http://127.0.0.1:3400").replace(/\/+$/, "");
-  const picamUrl = (env["PICAM_URL"] ?? "http://127.0.0.1:3300").replace(/\/+$/, "");
-  const pitubeUrl = (env["PITUBE_URL"] ?? "http://127.0.0.1:3105").replace(/\/+$/, "");
+  const picamUrl = (env["PICAM_URL"] ?? "http://127.0.0.1:3102").replace(/\/+$/, "");
+  const pitubeUrl = (env["PITUBE_URL"] ?? "http://127.0.0.1:3500").replace(/\/+$/, "");
 
   const minShotDwellSec = Number.parseFloat(env["PIDIRECTOR_MIN_SHOT_DWELL_SEC"] ?? "4");
   const maxShotDwellSec = Number.parseFloat(env["PIDIRECTOR_MAX_SHOT_DWELL_SEC"] ?? "30");
@@ -80,7 +80,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   return {
     host,
-    port: Number.isNaN(port) ? 3450 : port,
+    port: Number.isNaN(port) ? 3401 : port,
     mode,
     ollamaUrl,
     fastModel,
