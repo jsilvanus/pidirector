@@ -362,6 +362,10 @@ export class EventIngestor {
             await this.parseAndHandleBlock(block);
           }
         }
+        // The stream ended cleanly (gateway restarted or closed it): wait before reconnecting, no tight loop.
+        this.connected = false;
+        if (signal.aborted) return;
+        await new Promise((r) => setTimeout(r, backoffMs));
       } catch (err) {
         this.connected = false;
         if (signal.aborted) return;
