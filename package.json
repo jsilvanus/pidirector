@@ -35,7 +35,7 @@
   "pi": {
     "service": "pidirector",
     "displayName": "PiDirector",
-    "layer": "orchestration",
+    "layer": "Layer 3: Orchestration",
     "port": 3401,
     "ports": {},
     "healthEndpoint": "/health",
