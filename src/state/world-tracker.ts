@@ -3,7 +3,9 @@ import {
   parseSteeringDurationSec,
   type AiConstraints,
   type AiGeneralInstructions,
+  type AiGraphicsOptions,
   type AiItemInstructions,
+  type GraphicTemplateSummary,
   type HumanSteeringPatch,
   type HumanSteeringState,
   type PitubeBroadcastSnapshot,
@@ -218,10 +220,33 @@ export class WorldTracker {
     updatedAt: null,
   };
 
+  private graphicsCatalog: GraphicTemplateSummary[] = [];
+
   constructor(eventBroker?: DirectorEventBroker, initialMinDwellSec = 4, initialMaxDwellSec = 30) {
     this.eventBroker = eventBroker;
     this.rundown.generalAi.constraints.minShotDwellSec = initialMinDwellSec;
     this.rundown.generalAi.constraints.maxShotDwellSec = initialMaxDwellSec;
+  }
+
+  setGraphicsCatalog(catalog: GraphicTemplateSummary[]): void {
+    this.graphicsCatalog = catalog;
+  }
+
+  getGraphicsCatalog(): GraphicTemplateSummary[] {
+    return [...this.graphicsCatalog];
+  }
+
+  getFilteredGraphicsCatalog(options?: AiGraphicsOptions): GraphicTemplateSummary[] {
+    if (!options) return [...this.graphicsCatalog];
+    const { lowerThird, overlay, templates } = options;
+    if (!lowerThird && !overlay && !templates) return [...this.graphicsCatalog];
+
+    return this.graphicsCatalog.filter((item) => {
+      if (templates && templates.includes(item.id)) return true;
+      if (lowerThird && lowerThird.includes(item.id)) return true;
+      if (overlay && overlay.includes(item.id)) return true;
+      return false;
+    });
   }
 
   getSwitcher(nowMs = Date.now()): SwitcherSnapshot {

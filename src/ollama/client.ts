@@ -62,6 +62,7 @@ export class OllamaDirectorClient {
     const constraints = world.getEffectiveConstraints();
     const cameras = cameraMotion.getAllSnapshots();
     const transcripts = world.getRecentTranscripts();
+    const availableGraphics = world.getFilteredGraphicsCatalog(rundown.currentItemAi?.graphicsOptions);
 
     const pacing =
       steering.pacing ??
@@ -105,7 +106,7 @@ Respond ONLY with a valid JSON object matching this exact schema:
   "prepareCamera": { "camera": 2, "preset": 1 }, // optional
   "cutToInput": 2, // optional ATEM input number (1, 2, 3)
   "transition": "cut" | "auto",
-  "graphics": { "showLowerThird": true, "title": "Saarna", "subtitle": "Pastori" }, // optional
+  "graphics": { "showLowerThird": true, "templateId": "lower-third-speaker", "title": "Saarna", "subtitle": "Pastori" }, // optional
   "rationale": "Concise human-readable justification for operator log"
 }
 
@@ -176,6 +177,7 @@ Hard Broadcast Rules:
       recentTranscripts: transcripts
         .slice(-this.rollingTranscriptWindow)
         .map((t) => t.text),
+      availableGraphics: availableGraphics.length > 0 ? availableGraphics : undefined,
     };
 
     return {

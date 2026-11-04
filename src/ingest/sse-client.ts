@@ -1,13 +1,16 @@
 import type { DirectorEngine } from "../engine/director-engine.js";
+import type { McpExecutor } from "../mcp/mcp-executor.js";
 import type { CameraMotionTracker } from "../state/camera-motion-tracker.js";
 import type { DecisionLogger } from "../state/decision-logger.js";
 import type { WorldTracker } from "../state/world-tracker.js";
-import type { PitubeBroadcastSnapshot } from "../types.js";
+import type { GraphicTemplateSummary, PitubeBroadcastSnapshot } from "../types.js";
 
 export interface EventIngestorOptions {
   gatewayUrl: string;
   picamUrl?: string | undefined;
   pitubeUrl?: string | undefined;
+  pigraphicsUrl?: string | undefined;
+  mcpExecutor?: McpExecutor | undefined;
   world: WorldTracker;
   cameraMotion: CameraMotionTracker;
   engine: DirectorEngine;
@@ -26,6 +29,8 @@ export class EventIngestor {
   private readonly gatewayUrl: string;
   private readonly picamUrl?: string | undefined;
   private readonly pitubeUrl?: string | undefined;
+  private readonly pigraphicsUrl?: string | undefined;
+  private readonly mcpExecutor?: McpExecutor | undefined;
   private readonly world: WorldTracker;
   private readonly cameraMotion: CameraMotionTracker;
   private readonly engine: DirectorEngine;
@@ -42,6 +47,8 @@ export class EventIngestor {
     this.gatewayUrl = options.gatewayUrl.replace(/\/+$/, "");
     this.picamUrl = options.picamUrl?.replace(/\/+$/, "");
     this.pitubeUrl = options.pitubeUrl?.replace(/\/+$/, "");
+    this.pigraphicsUrl = options.pigraphicsUrl?.replace(/\/+$/, "");
+    this.mcpExecutor = options.mcpExecutor;
     this.world = options.world;
     this.cameraMotion = options.cameraMotion;
     this.engine = options.engine;
@@ -75,6 +82,62 @@ export class EventIngestor {
     }
   }
 
+  /**
+   * Syncs graphics templates catalog from pigraphics HTTP endpoint or picontrol-mcp resource.
+   */
+  async syncGraphicsCatalog(): Promise<GraphicTemplateSummary[] | null> {
+    let rawTemplates: any[] | null = null;
+
+    if (this.pigraphicsUrl) {
+      try {
+        const res = await this.fetchFn(`${this.pigraphicsUrl}/api/v1/graphics/templates`, {
+          method: "GET",
+        });
+        if (res.ok) {
+          rawTemplates = (await res.json()) as any[];
+        }
+      } catch {
+        // Fall back to MCP
+      }
+    }
+
+    if (!rawTemplates && this.mcpExecutor) {
+      try {
+        const res = await this.mcpExecutor.readResource("pi://graphics/templates");
+        if (res?.contents?.[0]?.text) {
+          rawTemplates = JSON.parse(res.contents[0].text) as any[];
+        }
+      } catch {
+        // MCP read failed
+      }
+    }
+
+    if (!rawTemplates || !Array.isArray(rawTemplates)) {
+      return null;
+    }
+
+    const catalog: GraphicTemplateSummary[] = rawTemplates.map((t) => {
+      const bindings: string[] = [];
+      if (Array.isArray(t.layers)) {
+        for (const l of t.layers) {
+          if (l.binding && typeof l.binding === "string") {
+            bindings.push(l.binding);
+          }
+        }
+      }
+      return {
+        id: String(t.id),
+        name: String(t.name ?? t.id),
+        ...(t.description ? { description: String(t.description) } : {}),
+        ...(t.tags ? { tags: Array.isArray(t.tags) ? t.tags.map(String) : [] } : {}),
+        ...(bindings.length > 0 ? { bindings } : {}),
+      };
+    });
+
+    this.world.setGraphicsCatalog(catalog);
+    return catalog;
+  }
+
   isConnected(): boolean {
     return this.connected;
   }
@@ -82,6 +145,8 @@ export class EventIngestor {
   start(): void {
     if (this.abortController) return;
     this.abortController = new AbortController();
+    void this.syncPitubeBroadcast();
+    void this.syncGraphicsCatalog();
     void this.connectSseLoop(`${this.gatewayUrl}/api/v1/events`, this.abortController.signal);
     if (this.picamUrl) {
       void this.connectSseLoop(`${this.picamUrl}/api/v1/events`, this.abortController.signal);
@@ -173,6 +238,13 @@ export class EventIngestor {
         if (typeof data?.["text"] === "string") {
           this.world.addTranscript(data["text"]);
         }
+        break;
+      }
+
+      case "graphics":
+      case "graphics.templates":
+      case "graphics.template_updated": {
+        await this.syncGraphicsCatalog();
         break;
       }
 

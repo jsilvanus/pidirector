@@ -42,6 +42,22 @@ export const AiGeneralInstructionsSchema = z.object({
 });
 export type AiGeneralInstructions = z.infer<typeof AiGeneralInstructionsSchema>;
 
+export interface GraphicTemplateSummary {
+  id: string;
+  name: string;
+  description?: string | undefined;
+  type?: string | undefined;
+  tags?: string[] | undefined;
+  bindings?: string[] | undefined;
+}
+
+export const AiGraphicsOptionsSchema = z.object({
+  lowerThird: z.array(z.string()).optional(),
+  overlay: z.array(z.string()).optional(),
+  templates: z.array(z.string()).optional(),
+}).passthrough();
+export type AiGraphicsOptions = z.infer<typeof AiGraphicsOptionsSchema>;
+
 export const AiItemInstructionsSchema = z.object({
   instructions: z.string().optional(),
   targetZone: z.string().optional(),
@@ -55,6 +71,7 @@ export const AiItemInstructionsSchema = z.object({
     .object({
       lowerThird: z
         .object({
+          templateId: z.string().optional(),
           title: z.string(),
           subtitle: z.string().optional(),
           autoShowSec: z.number().optional(),
@@ -62,6 +79,7 @@ export const AiItemInstructionsSchema = z.object({
         .optional(),
     })
     .optional(),
+  graphicsOptions: AiGraphicsOptionsSchema.optional(),
 });
 export type AiItemInstructions = z.infer<typeof AiItemInstructionsSchema>;
 
@@ -80,6 +98,7 @@ export const DirectorDecisionSchema = z.object({
   graphics: z
     .object({
       showLowerThird: z.boolean().default(false),
+      templateId: z.string().optional(),
       title: z.string().optional(),
       subtitle: z.string().optional(),
       durationMs: z.number().int().positive().optional(),
@@ -273,6 +292,7 @@ export interface DirectorLogActionSummary {
   transition?: "cut" | "auto" | undefined;
   graphics?: {
     showLowerThird: boolean;
+    templateId?: string | undefined;
     title?: string | undefined;
     subtitle?: string | undefined;
   } | undefined;

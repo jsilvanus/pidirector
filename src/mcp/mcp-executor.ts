@@ -134,6 +134,44 @@ export class McpExecutor {
     }
   }
 
+  async readResource(
+    uri: string,
+    signal?: AbortSignal
+  ): Promise<{ contents: Array<{ uri: string; text?: string; mimeType?: string }> } | null> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    };
+    if (this.mcpToken) {
+      headers["Authorization"] = `Bearer ${this.mcpToken}`;
+    }
+
+    const body = {
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method: "resources/read",
+      params: { uri },
+    };
+
+    try {
+      const res = await this.fetchFn(this.mcpUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal,
+      });
+
+      if (!res.ok) return null;
+      const json = (await res.json().catch(() => null)) as {
+        result?: { contents?: Array<{ uri: string; text?: string; mimeType?: string }> };
+      } | null;
+
+      return json?.result?.contents ? { contents: json.result.contents } : null;
+    } catch {
+      return null;
+    }
+  }
+
   async executeDecision(
     decision: DirectorDecision,
     world: WorldTracker,
@@ -255,12 +293,17 @@ export class McpExecutor {
     world.recordProgramCut(targetInput);
 
     // Step 4: Show Timed Lower Third (if requested)
-    if (decision.graphics?.showLowerThird && decision.graphics.title) {
+    if (decision.graphics?.showLowerThird && (decision.graphics.title || decision.graphics.templateId)) {
       const gfxArgs: Record<string, unknown> = {
         action: "show",
-        title: decision.graphics.title,
         durationMs: decision.graphics.durationMs ?? 8000,
       };
+      if (decision.graphics.templateId) {
+        gfxArgs["templateId"] = decision.graphics.templateId;
+      }
+      if (decision.graphics.title) {
+        gfxArgs["title"] = decision.graphics.title;
+      }
       if (decision.graphics.subtitle) {
         gfxArgs["subtitle"] = decision.graphics.subtitle;
       }

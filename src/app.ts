@@ -85,6 +85,8 @@ export function buildApp(config: AppConfig, options?: BuildAppOptions): BuildApp
     gatewayUrl: config.pigatewayUrl,
     picamUrl: config.picamUrl,
     pitubeUrl: config.pitubeUrl,
+    pigraphicsUrl: config.pigraphicsUrl,
+    mcpExecutor,
     world,
     cameraMotion,
     engine,

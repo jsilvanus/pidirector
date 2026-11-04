@@ -369,9 +369,14 @@ export class DirectorEngine {
     }
 
     const lowerThird = itemAi?.graphicsCue?.lowerThird;
+    const templateId =
+      lowerThird?.templateId ??
+      itemAi?.graphicsOptions?.lowerThird?.[0] ??
+      itemAi?.graphicsOptions?.templates?.[0];
     const graphics = lowerThird
       ? {
           showLowerThird: true,
+          ...(templateId ? { templateId } : {}),
           title: lowerThird.title,
           ...(lowerThird.subtitle ? { subtitle: lowerThird.subtitle } : {}),
           ...(lowerThird.autoShowSec ? { durationMs: lowerThird.autoShowSec * 1000 } : {}),
