@@ -4,6 +4,7 @@ import {
   type DirectorDecision,
 } from "../types.js";
 import type { CameraMotionTracker } from "../state/camera-motion-tracker.js";
+import { normalizeKeepAlive } from "../config.js";
 import type { WorldTracker } from "../state/world-tracker.js";
 
 export interface OllamaDirectorClientOptions {
@@ -11,6 +12,7 @@ export interface OllamaDirectorClientOptions {
   fastModel: string;
   reasoningModel: string;
   timeoutMs: number;
+  keepAlive?: string | number | undefined;
   rollingDecisionWindow?: number | undefined;
   rollingTranscriptWindow?: number | undefined;
   fetchFn?: typeof fetch | undefined;
@@ -21,6 +23,7 @@ export class OllamaDirectorClient {
   private readonly fastModel: string;
   private readonly reasoningModel: string;
   private readonly timeoutMs: number;
+  private readonly keepAlive: string | number;
   private readonly rollingDecisionWindow: number;
   private readonly rollingTranscriptWindow: number;
   private readonly fetchFn: typeof fetch;
@@ -30,6 +33,7 @@ export class OllamaDirectorClient {
     this.fastModel = options.fastModel;
     this.reasoningModel = options.reasoningModel;
     this.timeoutMs = options.timeoutMs;
+    this.keepAlive = normalizeKeepAlive(options.keepAlive);
     this.rollingDecisionWindow = options.rollingDecisionWindow ?? 5;
     this.rollingTranscriptWindow = options.rollingTranscriptWindow ?? 6;
     this.fetchFn = options.fetchFn ?? globalThis.fetch;
@@ -231,6 +235,7 @@ Hard Broadcast Rules:
           ],
           stream: false,
           format: "json",
+          keep_alive: this.keepAlive,
           options: { temperature: 0.1 },
         }),
         signal: watchdog.signal,

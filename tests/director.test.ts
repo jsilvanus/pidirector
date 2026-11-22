@@ -567,11 +567,13 @@ test("Rolling context (recentDecisions & transcripts) is passed to Ollama and hu
 test("Rundown situational awareness: placeInEvent, hierarchical timing, nextItem + cue, and timer/duration in Ollama prompt and logs", async () => {
   let lastSystemPrompt = "";
   let lastUserPayload: any = null;
+  let lastKeepAlive: unknown;
 
   const mockFetch: typeof fetch = async (input, init) => {
     const url = String(input);
     if (url.endsWith("/api/chat")) {
       const body = JSON.parse(String(init?.body ?? "{}"));
+      lastKeepAlive = body.keep_alive;
       lastSystemPrompt = String(body.messages?.[0]?.content ?? "");
       lastUserPayload = JSON.parse(body.messages?.[1]?.content ?? "{}");
 
@@ -677,6 +679,9 @@ test("Rundown situational awareness: placeInEvent, hierarchical timing, nextItem
     payload: { trigger: "pacing_check", bypassDwell: true },
   });
   assert.equal(evalRes.statusCode, 200);
+
+  // Every Ollama request keeps the model loaded (default 15 minutes)
+  assert.equal(lastKeepAlive, "15m");
 
   // Verify system prompt and user payload passed to Ollama
   assert.match(lastSystemPrompt, /4\/18 prayer for dead/);
@@ -1054,4 +1059,13 @@ test("Per-broadcast log and steering notes dump with pitube broadcast title, dat
   assert.ok(savedIds.includes("2026-11-01_iltamessu"));
 
   await app.close();
+});
+
+
+test("Ollama keep_alive is configurable through PIDIRECTOR_OLLAMA_KEEP_ALIVE", () => {
+  assert.equal(loadConfig({}).ollamaKeepAlive, "15m");
+  assert.equal(loadConfig({ PIDIRECTOR_OLLAMA_KEEP_ALIVE: "1h" }).ollamaKeepAlive, "1h");
+  assert.equal(loadConfig({ OLLAMA_KEEP_ALIVE: "30m" }).ollamaKeepAlive, "30m");
+  assert.equal(loadConfig({ PIDIRECTOR_OLLAMA_KEEP_ALIVE: "-1" }).ollamaKeepAlive, -1);
+  assert.equal(loadConfig({ PIDIRECTOR_OLLAMA_KEEP_ALIVE: "  " }).ollamaKeepAlive, "15m");
 });

@@ -57,6 +57,7 @@ export function buildApp(config: AppConfig, options?: BuildAppOptions): BuildApp
     fastModel: config.fastModel,
     reasoningModel: config.reasoningModel,
     timeoutMs: config.ollamaTimeoutMs,
+    keepAlive: config.ollamaKeepAlive,
     rollingDecisionWindow: config.rollingDecisionWindow,
     rollingTranscriptWindow: config.rollingTranscriptWindow,
     fetchFn: options?.fetchFn,
