@@ -8,6 +8,8 @@ export interface AppConfig {
   fastModel: string;
   reasoningModel: string;
   ollamaTimeoutMs: number;
+  /** Ollama keep_alive (PIDIRECTOR_OLLAMA_KEEP_ALIVE, default 15m). */
+  ollamaKeepAlive: string | number;
   mcpUrl: string;
   mcpToken?: string | undefined;
   pigatewayUrl: string;
@@ -29,6 +31,21 @@ export interface AppConfig {
   rollingTranscriptWindow: number;
 }
 
+/** Ollama `keep_alive` default: keep a model loaded for 15 minutes after its last request. */
+export const DEFAULT_OLLAMA_KEEP_ALIVE = "15m";
+
+/**
+ * Turn an env/config value into what Ollama accepts: a duration string ("15m") or a number of
+ * seconds (-1 = forever, 0 = unload at once). Empty/undefined gives the 15 minute default.
+ */
+export function normalizeKeepAlive(value: string | number | undefined | null): string | number {
+  if (value === undefined || value === null) return DEFAULT_OLLAMA_KEEP_ALIVE;
+  if (typeof value === "number") return value;
+  const v = value.trim();
+  if (!v) return DEFAULT_OLLAMA_KEEP_ALIVE;
+  return /^-?\d+$/.test(v) ? Number(v) : v;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const port = Number.parseInt(env["PIDIRECTOR_PORT"] ?? "3401", 10);
   const host = env["PIDIRECTOR_HOST"] ?? "0.0.0.0";
@@ -42,6 +59,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const fastModel = env["PIDIRECTOR_FAST_MODEL"] ?? "llama3.2:3b";
   const reasoningModel = env["PIDIRECTOR_REASONING_MODEL"] ?? "qwen2.5:7b-instruct";
   const ollamaTimeoutMs = Number.parseInt(env["PIDIRECTOR_OLLAMA_TIMEOUT_MS"] ?? "800", 10);
+
+  const ollamaKeepAlive = normalizeKeepAlive(env["PIDIRECTOR_OLLAMA_KEEP_ALIVE"] ?? env["OLLAMA_KEEP_ALIVE"]);
 
   const mcpUrl = env["PICONTROL_MCP_URL"] ?? "http://127.0.0.1:3600/mcp";
   const mcpToken = env["PIDIRECTOR_MCP_TOKEN"]?.trim() || undefined;
@@ -88,6 +107,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     fastModel,
     reasoningModel,
     ollamaTimeoutMs: Number.isNaN(ollamaTimeoutMs) ? 800 : ollamaTimeoutMs,
+    ollamaKeepAlive,
     mcpUrl,
     mcpToken,
     pigatewayUrl,
